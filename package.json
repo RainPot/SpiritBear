@@ -1,0 +1,28 @@
+{
+  "name": "taberrand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "在 Chrome 中用自选模型搜索网页、整理资料并保存 Markdown",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "typecheck": "wxt prepare && tsc --noEmit"
+  },
+  "dependencies": {
+    "idb": "^8.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "~5.9.3",
+    "wxt": "0.21.5"
+  }
+}

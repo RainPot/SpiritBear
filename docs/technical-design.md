@@ -45,7 +45,7 @@ flowchart TB
 | 模型适配器 | 发送模型请求，把供应商响应转换成工具调用或报告草稿，归一化错误和用量。 |
 | 任务存储 | 写入运行状态、动作回执、证据和报告。侧栏重连后从持久化记录恢复界面。 |
 
-工程栈拟用 TypeScript、WXT 和 React。WXT 负责构建 Manifest V3 的侧栏、后台和按需注入脚本。Agent、模型适配、报告生成作为独立 TypeScript 模块，可用模拟模型和网页夹具验证。Chrome 116 作为 API 基线，实际验收记录当时的 Chrome 稳定版版本。 [WXT 入口定义](https://wxt.dev/guide/essentials/entrypoints.html) · [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
+MVP 使用 TypeScript、WXT 和 React。WXT 负责构建 Manifest V3 的侧栏、后台和按需注入脚本。Agent、模型适配、报告生成作为独立 TypeScript 模块，可用模拟模型和网页夹具验证。Chrome 116 作为 API 基线，实际验收记录当时的 Chrome 稳定版版本。 [WXT 入口定义](https://wxt.dev/guide/essentials/entrypoints.html) · [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 
 ## 3. 标签页与授权
 
@@ -73,7 +73,7 @@ Agent 在一次任务中重复「观察页面 → 请求模型 → 派发一项�
 | `collect_source` | 从当前页面读取标题、可回访链接和证据片段，由扩展生成证据 ID。 |
 | `finish_report` | 提交按主题组织的条目和证据 ID，由扩展核对并生成 Markdown。 |
 
-观察器在隔离世界中按需注入，使用标签、角色、可见文本和链接构建有限大小的观察，给可交互元素分配当前观察内的 ID。模型只拿到任务内的引用。Worker 将引用解析为真实标签页和文档，通过 `documentId` 定向通信。首版以主文档为观察范围。跨域 iframe、需要真实用户手势的控件或后台不渲染的页面，由侧栏提示用户打开任务页或接管。 [Chrome 内容脚本](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) · [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting)
+观察器在隔离世界中按需注入，使用标签、角色、可见文本和链接构建有限大小的观察，给可交互元素分配当前观察内的 ID。模型只拿到任务内的引用。Worker 将引用解析为真实标签页和文档，通过 `documentId` 定向通信。MVP 以主文档为观察范围。跨域 iframe、需要真实用户手势的控件或后台不渲染的页面，由侧栏提示用户打开任务页或接管。 [Chrome 内容脚本](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) · [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting)
 
 执行入口统一校验参数、任务与页面归属、当前文档和站点权限。搜索和筛选动作面向语义清楚的查询控件，控件用途不明时交给用户。工具参数通过类型和运行时 schema 校验，模型输出只作为工具请求处理。
 
@@ -111,7 +111,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 ## 5. 两个模型厂商共用一套工具
 
-配置项为 `providerId`、`baseUrl`、`modelId` 和会话 API Key。内置 OpenAI 与 DeepSeek 两个配置预设。首版使用非流式 Chat Completions，操作进度由本地事件更新。DeepSeek 预设先验证非思考模式，模型 ID 在实测时记录。
+配置项为 `providerId`、`baseUrl`、`modelId` 和会话 API Key。内置 OpenAI 与 DeepSeek 两个配置预设。首版使用非流式 Chat Completions，操作进度由本地事件更新。OpenAI 预设默认 `gpt-4.1-mini`。DeepSeek 预设默认 `deepseek-flash`，请求使用非思考模式。两家都支持从设置页修改模型 ID 与 Base URL。
 
 | 预设 | Base URL | 工具协议 |
 | --- | --- | --- |
@@ -141,7 +141,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 - API Key 放在扩展受信任上下文的 `chrome.storage.session`，浏览器重启或扩展重载后重新输入。Provider 只向用户配置并授权的 HTTPS API 发送密钥，拒绝将鉴权请求重定向到其他地址。 [Chrome Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage) · [扩展跨源请求](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
 - 模型收到任务、相关可见文本和有限的工具结果。标签目录、浏览器凭据、表单值和完整 DOM 留在本机。页面文字作为资料处理，执行层以用户授权和工具 schema 决定可派发的动作。
-- 本地 IndexedDB 保存必要证据、草稿和事件。默认保留最近 20 次任务是实现建议，设置页提供清除入口。事件记录动作、耗时和结果，URL 中的敏感参数及模型密钥需要脱敏。
+- 本地 IndexedDB 保存必要证据、草稿和事件。保留最近 20 次任务，侧栏的本地任务记录提供清除入口。事件记录动作、耗时和结果，URL 中的敏感参数及模型密钥需要脱敏。
 - 工具限定普通 HTTPS 浏览和查询控件。发布、支付、删除和正式提交由用户操作。模型响应经过 schema 解析，扩展内的 Markdown 预览转义 HTML，链接只接受 HTTPS。
 
 ## 8. 开发顺序与验收
