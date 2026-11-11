@@ -49,6 +49,7 @@ export interface RunState {
   criteria: Criteria
   fixedCount?: number
   query?: string
+  planSummary?: string
   searchAttempt?: { pageId: string; query: string; before: SearchSnapshot }
   searchResult?: { url: string; title: string }
   pages: RunPage[]
@@ -63,9 +64,11 @@ export interface RunState {
   steps: number
   createdAt: number
   updatedAt: number
+  activeSince?: number
+  activeDurationMs?: number
   status: "running" | "paused" | "needs_user" | "complete" | "partial" | "interrupted"
   reason?: string
-  inFlight?: { id: string; label: string; at: number; epoch: string }
+  inFlight?: { id: string; label: string; detail?: string; at: number; epoch: string }
   report?: Artifact
   answer?: string
   download?: DownloadState

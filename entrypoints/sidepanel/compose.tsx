@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import type { ModelChoice, ModelConnection } from "../../src/agent/settings"
 import { pageOrigin } from "../../src/browser/urls"
 import { requestsMarkdown } from "../../src/run/intent"
 import { pageActionLabels, type PageRef, type StartInput } from "../../src/run/state"
+import { ChatIcon } from "./chat-icon"
 
 export type ComposeMessage = Omit<StartInput, "provider" | "model" | "previousRunId" | "windowId"> & { windowId?: number }
 interface Props {
@@ -37,10 +38,13 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
   const [dismissedTab, setDismissedTab] = useState<number>()
   const [windowId, setWindowId] = useState<number>()
   const [picker, setPicker] = useState(false)
+  const [attachmentOpen, setAttachmentOpen] = useState(false)
   const [mention, setMention] = useState<{ start: number; end: number; term: string }>()
   const [focused, setFocused] = useState(0)
   const [pickerError, setPickerError] = useState("")
   const editor = useRef<HTMLTextAreaElement>(null)
+  const attachmentButton = useRef<HTMLButtonElement>(null)
+  const focusWhenReady = useRef(true)
 
   const term = mention?.term.toLowerCase() ?? ""
   const current = activeTab && activeTab.page.tabId !== dismissedTab ? activeTab.page : undefined
@@ -72,7 +76,21 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
     }
   }, [])
 
+  useEffect(() => {
+    if (hidden || busy || !focusWhenReady.current) return
+    editor.current?.focus()
+    focusWhenReady.current = false
+  }, [hidden, busy])
+
+  useLayoutEffect(() => {
+    const field = editor.current
+    if (hidden || !field) return
+    field.style.height = "auto"
+    field.style.height = Math.min(field.scrollHeight, 122) + "px"
+  }, [hidden, task])
+
   async function openPicker() {
+    setAttachmentOpen(false)
     setPicker(true)
     setFocused(0)
     setPickerError("")
@@ -128,10 +146,10 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
   }
 
   return <div className="composer" hidden={hidden}>
-    {activeTab && !task && !refs.length && !startUrl && !picker &&
+    {activeTab && !running && !task && !refs.length && !startUrl && !picker &&
       <div className="page-shortcuts" role="group" aria-label="网页快捷操作">
         {(["summarize", "translate"] as const).map(action =>
-          <button key={action} type="button" className="secondary small" disabled={busy || running}
+          <button key={action} type="button" className="plain small" disabled={busy}
             title={activeTab.page.title}
             onClick={() => onSend({
               task: pageActionLabels[action], references: [activeTab.page], windowId: activeTab.windowId, pageAction: action,
@@ -140,7 +158,7 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
           </button>)}
       </div>}
     {picker && <div className="tab-picker" id="tab-options" role="listbox" aria-label="当前窗口标签页">
-      {matches.map((tab, index) => <button type="button" role="option" aria-selected={focused === index}
+      {matches.map((tab, index) => <button type="button" role="option" id={"tab-option-" + tab.tabId} aria-selected={focused === index}
         className="tab-option" key={tab.tabId} onClick={() => choose(tab)}>
         <span>{tab.title}</span><small>{new URL(tab.origin).hostname}</small>
       </button>)}
@@ -150,22 +168,23 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
       {(auto || refs.length > 0) && <ul className="reference-list" aria-label="已选参考标签页">
         {auto && <li>
           <span title={auto.title}><strong>当前页</strong> · {auto.title}</span>
-          <button type="button" aria-label="移除当前标签页" onClick={() => setDismissedTab(auto.tabId)}>×</button>
+          <button type="button" aria-label="移除当前标签页" onClick={() => setDismissedTab(auto.tabId)}><ChatIcon name="close" size={13} /></button>
         </li>}
         {refs.map(tab => <li key={tab.tabId}>
           <span title={tab.origin}>@ {tab.title}</span>
           <button type="button" aria-label={"移除 " + tab.title} onClick={() => {
             if (tab.tabId === current?.tabId) setDismissedTab(tab.tabId)
             setRefs(items => items.filter(ref => ref.tabId !== tab.tabId))
-          }}>×</button>
+          }}><ChatIcon name="close" size={13} /></button>
         </li>)}
       </ul>}
       {showUrl && <label className="field url-field">起始网址
         <input type="url" value={startUrl} onChange={event => setStartUrl(event.target.value)} placeholder="https://example.com" disabled={busy} />
       </label>}
       <textarea ref={editor} aria-label="任务指令" value={task} maxLength={6000} disabled={busy}
-        aria-controls={picker ? "tab-options" : undefined} rows={2}
-        placeholder={running ? "可以先写下一条消息" : "问个问题，或交给我一个网页任务"}
+        aria-controls={picker ? "tab-options" : undefined} rows={1}
+        aria-activedescendant={picker && matches[focused] ? "tab-option-" + matches[focused].tabId : undefined}
+        placeholder={running ? "可以先写下一条消息" : "问个问题，或请我操作网页"}
         onKeyDown={onKeyDown}
         onChange={event => {
           const value = event.target.value
@@ -183,11 +202,25 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
         }} />
       {requestsMarkdown(task) && <p className="export-intent">完成后自动下载 Markdown</p>}
       <div className="composer-footer">
-        <div className="composer-tools">
-          <button type="button" className="plain small mention-button" disabled={busy || refs.length >= 12}
-            aria-expanded={picker} onClick={() => picker ? setPicker(false) : void openPicker()}>@ 标签页</button>
-          <button type="button" className="plain small" disabled={busy}
-            aria-expanded={showUrl} onClick={() => setShowUrl(!showUrl)}>网址</button>
+        <div className="composer-tools" onBlur={event => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setAttachmentOpen(false)
+        }} onKeyDown={event => {
+          if (event.key === "Escape") {
+            setAttachmentOpen(false)
+            attachmentButton.current?.focus()
+          }
+        }}>
+          <button ref={attachmentButton} type="button" className="icon-button add-context" disabled={busy}
+            title="添加标签页或网址" aria-label="添加标签页或网址" aria-expanded={attachmentOpen}
+            onClick={() => { setPicker(false); setAttachmentOpen(!attachmentOpen) }}><ChatIcon name="add" size={19} /></button>
+          {attachmentOpen && <div className="attachment-menu" role="group" aria-label="添加网页上下文">
+            <button type="button" className="plain" disabled={refs.length >= 12}
+              onClick={() => { void openPicker(); editor.current?.focus() }}>@ 标签页</button>
+            <button type="button" className="plain" onClick={() => {
+              setAttachmentOpen(false)
+              setShowUrl(!showUrl)
+            }}>{showUrl ? "隐藏网址" : "添加网址"}</button>
+          </div>}
         </div>
         <div className="send-group">
           {model ? <select className="model-picker" aria-label="对话模型" title={model.model} disabled={busy || running}
@@ -199,9 +232,11 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
               {profile.models.map(model => <option key={model} value={modelKey({ provider: profile.id, model })}>{model}</option>)}
             </optgroup>)}
           </select> : <button type="button" className="plain small" disabled={busy} onClick={onSettings}>连接模型</button>}
-          {running ? <button type="button" className="secondary send stop" aria-label="暂停当前任务" disabled={busy} onClick={onPause}>
-            <span aria-hidden="true" />暂停
-          </button> : <button className="primary send" type="submit" disabled={busy || !task.trim()}>发送</button>}
+          {running ? <button type="button" className="send" title="暂停当前任务" aria-label="暂停当前任务" disabled={busy} onClick={onPause}>
+            <ChatIcon name="stop" size={19} />
+          </button> : <button className="send" type="submit" title="发送" aria-label="发送" disabled={busy || !task.trim()}>
+            <ChatIcon name="send" size={18} />
+          </button>}
         </div>
       </div>
     </form>

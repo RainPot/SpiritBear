@@ -151,7 +151,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     allowedOrigins: [...origins],
     criteria: { sourceCount: fixedCount ?? Math.max(explicitCount, 1), topics: [] },
     fixedCount, evidence: inherited, events: [], tokens: 0, steps: 0,
-    createdAt: now, updatedAt: now, status: "running",
+    createdAt: now, updatedAt: now, activeSince: now, activeDurationMs: 0, status: "running",
   }
   addEvent(run, "收到消息", pages.length ? "引用 " + pages.length + " 个标签页" : startUrl ? new URL(startUrl).hostname : undefined)
   return announce(await createRun(run))
@@ -199,9 +199,13 @@ async function step(id: string, owner: string, name: string, raw: string): Promi
   const started = await changeRun(id, current => {
     own(current, owner)
     if (current.inFlight) throw new Error("仍有一项操作在途")
-    current.inFlight = { id: actionId, label, at: Date.now(), epoch: workerEpoch }
+    const args = tool.args
+    const detail = tool.name === "interact" && tool.args.action === "search" ? tool.args.value :
+      "pageId" in args ? current.pages.find(page => page.id === args.pageId)?.title : undefined
+    current.inFlight = { id: actionId, label, detail, at: Date.now(), epoch: workerEpoch }
     current.steps += 1
   })
+  announce(started)
   try {
     const result = await executeStep(started, tool)
     const run = await changeRun(id, current => {

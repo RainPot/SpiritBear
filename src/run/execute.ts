@@ -1,3 +1,4 @@
+import { visibleAssistantText } from "../agent/completion-stream"
 import type { ToolCall, ToolName } from "../agent/contracts"
 import { buildReport } from "../agent/report"
 import { getPage, NeedsUser, newTaskPage, pageUrl, sendToPage } from "../browser/browser"
@@ -30,13 +31,14 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
   switch (tool.name) {
     case "plan_task": {
       if (run.query) return { output: { query: run.query, ...run.criteria }, detail: "沿用已有目标" }
-      const { query, topics, sourceCount } = tool.args
+      const { query, topics, sourceCount, summary } = tool.args
       const criteria = { sourceCount: run.fixedCount ?? sourceCount, topics: [...new Set(topics)] }
       return {
         output: { query, ...criteria },
         detail: query + " · " + criteria.sourceCount + " 条来源",
         update(current) {
           current.query = query
+          current.planSummary = summary ? visibleAssistantText(summary).trim() || undefined : undefined
           current.criteria = criteria
         },
       }

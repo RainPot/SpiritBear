@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { ProviderProfile } from "../../src/agent/provider"
 import { providerForRun, readModelSettings, type ModelChoice } from "../../src/agent/settings"
 import { hostPattern, pageOrigin } from "../../src/browser/urls"
@@ -6,6 +6,7 @@ import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
 import { requestsMarkdown } from "../../src/run/intent"
 import { conversationId, type RunHistory, type RunState } from "../../src/run/state"
+import { ChatIcon } from "./chat-icon"
 import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
 import { Settings } from "./settings"
@@ -25,6 +26,8 @@ export function App() {
   const [draftVersion, setDraftVersion] = useState(0)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<{ id: string; text: string }>()
+  const [awayFromEnd, setAwayFromEnd] = useState(false)
   const lock = useRef(false)
   const clientRef = useRef<PanelClient | null>(null)
   const runner = useRef<{ id: string; controller: AbortController; done: Promise<void> } | null>(null)
@@ -78,10 +81,20 @@ export function App() {
     }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = transcript.current
     if (element && followTail.current) element.scrollTop = element.scrollHeight
-  }, [threadId, section, last?.updatedAt, turns.length])
+  }, [threadId, section, last?.updatedAt, turns.length, preview])
+
+  useEffect(() => {
+    const element = transcript.current
+    if (!element) return
+    const observer = new ResizeObserver(() => {
+      if (followTail.current) element.scrollTop = element.scrollHeight
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [section])
 
   function withAction(action: (client: PanelClient) => Promise<unknown>) {
     const client = clientRef.current
@@ -97,23 +110,37 @@ export function App() {
 
   function launch(client: PanelClient, initial: RunState, configuration: { profile: ProviderProfile; apiKey: string }, history: RunState[]) {
     const controller = new AbortController()
+    let frame: number | undefined
+    let text = ""
+    function showPreview(value: string) {
+      if (controller.signal.aborted) return
+      text = value
+      if (frame !== undefined) return
+      frame = requestAnimationFrame(() => {
+        frame = undefined
+        setPreview(current => text ? { id: initial.id, text } : current?.id === initial.id ? undefined : current)
+      })
+    }
     const heartbeat = window.setInterval(() => {
       void client.request({ kind: "ping" }).catch(() => undefined)
     }, 18_000)
     const done = (async () => {
       try {
         const { runAgent } = await import("../../src/run/loop")
-        const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal, history)
+        const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal, history, showPreview)
         if (!controller.signal.aborted && finished.status === "complete" && requestsMarkdown(finished.task) &&
           (finished.answer || finished.report?.complete)) {
           await saveMarkdown(client, finished.id, true)
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          setError(message(error))
-          await client.request({ kind: "pause", id: initial.id, reason: message(error) }).catch(() => undefined)
+          const reason = message(error)
+          const paused = await client.request<RunState>({ kind: "pause", id: initial.id, reason }).catch(() => undefined)
+          if (paused?.reason !== reason) setError(reason)
         }
       } finally {
+        if (frame !== undefined) cancelAnimationFrame(frame)
+        setPreview(current => current?.id === initial.id ? undefined : current)
         window.clearInterval(heartbeat)
         if (runner.current?.controller === controller) runner.current = null
       }
@@ -155,6 +182,7 @@ export function App() {
         input: { ...draft, windowId: currentWindowId, ...selected, startUrl, previousRunId: last?.id },
       })
       followTail.current = true
+      setAwayFromEnd(false)
       updateRun(started)
       setThreadId(conversationId(started))
       setDraftVersion(version => version + 1)
@@ -201,6 +229,7 @@ export function App() {
     setShowHistory(false)
     setDraftVersion(version => version + 1)
     followTail.current = true
+    setAwayFromEnd(false)
   }
 
   function selectModel(value: ModelChoice) {
@@ -239,10 +268,11 @@ export function App() {
     {section === "settings" ? <div className="settings-body">
       <Settings connections={models.connections} onChanged={async () => setModels(await readModelSettings())} />
       <SiteGuides />
-    </div> :
+    </div> : <div className="chat-area">
       <div className="transcript" ref={transcript} onScroll={event => {
         const element = event.currentTarget
         followTail.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70
+        setAwayFromEnd(!followTail.current)
       }}>
         {!turns.length && <div className="welcome">
           <h1>在浏览器里做什么？</h1>
@@ -255,7 +285,8 @@ export function App() {
             </ul>}
             <p>{run.task}</p>
           </div>
-          <RunView run={run} current={run.id === last?.id} live={run.session === session} busy={busy}
+          <RunView run={run} preview={preview?.id === run.id ? preview.text : undefined}
+            current={run.id === last?.id} live={run.session === session} busy={busy}
             takeOver={() => pauseRun(run, true)}
             resume={() => withAction(client => continueRun(client, run))}
             authorize={() => authorize(run)}
@@ -264,7 +295,14 @@ export function App() {
             cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))} />
         </section>)}
       </div>
-    }
+      {awayFromEnd && turns.length > 0 && <button type="button" className="icon-button jump-to-latest" title="跳到最新消息"
+        aria-label="跳到最新消息" onClick={() => {
+          followTail.current = true
+          setAwayFromEnd(false)
+          const element = transcript.current
+          if (element) element.scrollTop = element.scrollHeight
+        }}><ChatIcon name="down" /></button>}
+    </div>}
     <Compose key={draftVersion} busy={busy} hidden={section !== "chat"} running={running}
       connections={models.connections} model={models.selected} onModel={selectModel}
       onSettings={() => { setSection("settings"); setShowHistory(false); setError("") }}

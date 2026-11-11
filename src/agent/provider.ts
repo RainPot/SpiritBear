@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { readCompletionStream, visibleAssistantText } from "./completion-stream"
 import type { ToolDefinition } from "./contracts"
 
 export type BuiltinProviderId = "openai" | "deepseek"
@@ -74,21 +75,26 @@ const responseSchema = z.object({
   usage: z.object({ total_tokens: z.number().optional() }).nullish(),
 })
 
+interface CompletionOptions {
+  signal?: AbortSignal
+  onText?: (text: string) => void
+  namedTool?: string
+}
+
 export async function completeChat(
   profile: ProviderProfile,
   apiKey: string,
   messages: ChatMessage[],
   tools: ToolDefinition[],
-  signal?: AbortSignal,
-  fetcher: typeof fetch = fetch,
-  namedTool?: string,
+  { signal, onText, namedTool }: CompletionOptions = {},
 ): Promise<Completion> {
   const endpoint = completionEndpoint(profile.baseUrl)
   const deadline = AbortSignal.timeout(55_000)
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
+  const stream = Boolean(onText) && isBuiltinProvider(profile.id)
   let response: Response
   try {
-    response = await fetcher(endpoint.href, {
+    response = await fetch(endpoint.href, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}) },
       credentials: "omit",
@@ -99,7 +105,8 @@ export async function completeChat(
         model: profile.model,
         messages,
         ...(tools.length ? { tools } : {}),
-        stream: false,
+        stream,
+        ...(stream && endpoint.hostname === "api.openai.com" ? { stream_options: { include_usage: true } } : {}),
         ...(profile.id === "deepseek" ? { thinking: { type: "disabled" } } : {}),
         ...(namedTool ? { tool_choice: { type: "function", function: { name: namedTool } } } : {}),
       }),
@@ -116,18 +123,22 @@ export async function completeChat(
   }
 
   let data: unknown
+  const streaming = response.headers.get("content-type")?.includes("text/event-stream")
   try {
-    data = await response.json()
+    data = streaming && response.body
+      ? await readCompletionStream(response.body, onText)
+      : await response.json()
   } catch (error) {
     if (signal?.aborted) throw error
-    throw new Error(deadline.aborted ? "读取模型响应超时" : "模型 API 响应不是有效 JSON")
+    if (deadline.aborted) throw new Error("读取模型响应超时")
+    throw new Error(streaming ? "模型流式回复中断或格式无效，请重试" : "模型 API 响应不是有效 JSON")
   }
   const parsed = responseSchema.safeParse(data)
   if (!parsed.success) throw new Error("模型响应不符合 Chat Completions 工具协议")
   const message = parsed.data.choices[0].message
   const calls = message.tool_calls ?? []
   if (new Set(calls.map(call => call.id)).size !== calls.length) throw new Error("模型返回了重复的工具调用 ID")
-  return { content: message.content ?? null, tool_calls: calls, tokens: parsed.data.usage?.total_tokens }
+  return { content: message.content == null ? null : visibleAssistantText(message.content), tool_calls: calls, tokens: parsed.data.usage?.total_tokens }
 }
 
 export async function testProvider(profile: ProviderProfile, apiKey: string, signal?: AbortSignal): Promise<void> {
@@ -137,6 +148,6 @@ export async function testProvider(profile: ProviderProfile, apiKey: string, sig
   }], [{
     type: "function",
     function: { name, description: "验证工具调用能力", parameters: { type: "object", properties: {}, additionalProperties: false } },
-  }], signal, fetch, name)
+  }], { signal, namedTool: name })
   if (!reply.tool_calls.some(call => call.function.name === name)) throw new Error("该模型未返回工具调用")
 }

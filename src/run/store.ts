@@ -46,13 +46,19 @@ export async function changeRun(id: string, update: (run: RunState) => void): Pr
   if (!run) throw new Error("这条任务记录已清除")
   const alreadyRunning = run.status === "running"
   update(run)
+  const now = Date.now()
   if (!alreadyRunning && run.status === "running") {
     const others = await tx.store.getAll()
     if (others.some(item => item.id !== id && (item.status === "running" || item.inFlight))) {
       throw new Error("请先暂停其他任务，等待在途操作返回")
     }
+    run.activeDurationMs ??= Math.max(0, run.updatedAt - run.createdAt)
+    run.activeSince = now
+  } else if (alreadyRunning && run.status !== "running") {
+    run.activeDurationMs = (run.activeDurationMs ?? 0) + Math.max(0, now - (run.activeSince ?? run.createdAt))
+    run.activeSince = undefined
   }
-  run.updatedAt = Date.now()
+  run.updatedAt = now
   await tx.store.put(run)
   await tx.done
   return run

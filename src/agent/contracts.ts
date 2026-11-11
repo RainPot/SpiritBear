@@ -21,6 +21,7 @@ const schemas = {
     query: label,
     sourceCount: z.number().int().min(1).max(20),
     topics: z.array(label).max(8),
+    summary: z.string().trim().min(1).max(180).optional(),
   }),
   open_page: z.strictObject({
     fromPageId: id.optional(),
@@ -42,7 +43,7 @@ const schemas = {
 }
 
 const toolDescriptions: Record<keyof typeof schemas, string> = {
-  plan_task: "记录用户要检索的主题、来源数量和明确要求的报告标题。只记录一次。",
+  plan_task: "记录用户要检索的主题、来源数量和明确要求的报告标题。summary 可用一句给用户看的话说明准备查什么、如何核对。只记录一次。",
   open_page: "新建任务页。仅提供一个参数：复制指定页 fromPageId，打开观察中的链接 link，或访问用户授权站点的 HTTPS 地址 url。",
   observe_page: "读取指定页的可见正文、链接和查询控件。导航或页面变化后重新观察。",
   interact: "在任务页操作最近观察。search 使用搜索框 elementId 与 value 输入并尝试查询。click 点击查询控件。choose 使用下拉控件和选项 value。scroll 使用 direction。",
