@@ -1,11 +1,13 @@
 import { parseToolCall, requestedSourceCount } from "../src/agent/contracts"
-import { evidenceDraft } from "../src/agent/report"
+import { isProviderId } from "../src/agent/provider"
+import { evidenceDraft, replyMarkdown } from "../src/agent/report"
 import { getPage, getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
 import { requiresSearchBox } from "../src/browser/search-proof"
 import { cleanPageUrl, hostPattern, pageOrigin } from "../src/browser/urls"
 import { executeStep, toolLabels } from "../src/run/execute"
+import { requestsMarkdown } from "../src/run/intent"
 import { changeRun, clearRuns, createRun, getRun, listRuns } from "../src/run/store"
-import { addEvent, conversationId, pageActionLabels, type PanelCommand, type PanelReply, type PanelRequest, type RunHistory, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
+import { addEvent, conversationId, pageActionLabels, type MarkdownExport, type PageRef, type PanelCommand, type PanelReply, type PanelRequest, type RunHistory, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
 
 const workerEpoch = crypto.randomUUID()
 const owners = new Map<string, chrome.runtime.Port>()
@@ -83,33 +85,32 @@ async function reconcile(): Promise<RunState[]> {
   }))
 }
 
+function referencePage(ref: PageRef, tab: chrome.tabs.Tab): RunPage {
+  return { ...ref, title: (tab.title || ref.title).slice(0, 160), role: "reference", id: crypto.randomUUID() }
+}
+
 async function start(input: StartInput, owner: string): Promise<RunState> {
   await reconcile()
   const task = input.task.trim()
   if (!task || task.length > 6000) throw new Error("请填写 1 到 6000 字的任务")
-  if (input.provider !== "openai" && input.provider !== "deepseek") throw new Error("请选择模型供应商")
+  if (!isProviderId(input.provider)) throw new Error("请选择模型供应商")
   if (input.references.length > 12) throw new Error("一条任务最多引用 12 个标签页")
   if (input.pageAction !== undefined && (!Object.hasOwn(pageActionLabels, input.pageAction) ||
-    input.references.length !== 1 || input.startUrl)) throw new Error("请选择一个网页进行总结或翻译")
+    input.references.length !== 1 || input.startUrl || input.currentPage)) throw new Error("请选择一个网页进行总结或翻译")
   const window = await chrome.windows.get(input.windowId)
   if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用 TabErrand")
   const session = await sessionId()
   const previous = input.previousRunId ? await getRun(input.previousRunId) : undefined
-  const explicit = input.references.length > 0
-  const retained = previous?.session === session && previous.windowId === input.windowId
-    ? previous.pages.filter(page => page.role === "reference") : []
   const pages: RunPage[] = []
   const origins = new Set<string>()
-  for (const ref of explicit ? input.references : retained) {
+  for (const ref of input.references) {
     const tab = await getTab(ref.tabId, input.windowId).catch(() => undefined)
     if (!tab || !ref.origin || pageOrigin(tab.url ?? "") !== ref.origin) {
-      if (explicit) throw new Error("参考页已关闭或跳转，请重新选择标签页")
-      continue
+      throw new Error("参考页已关闭或跳转，请重新选择标签页")
     }
     if (input.pageAction && !tab.active) throw new Error("活动标签页已切换，请重新点击网页快捷操作")
-    if (!explicit && !await chrome.permissions.contains({ origins: [hostPattern(ref.origin)] })) continue
     if (pages.some(page => page.tabId === ref.tabId)) continue
-    pages.push({ ...ref, title: (tab.title || ref.title).slice(0, 160), role: "reference", id: crypto.randomUUID() })
+    pages.push(referencePage(ref, tab))
     origins.add(ref.origin)
   }
   let startUrl: string | undefined
@@ -120,6 +121,22 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     origins.add(origin)
   }
   if (origins.size && !await chrome.permissions.contains({ origins: [...origins].map(hostPattern) })) throw new Error("需要授权任务站点")
+  const explicitCount = pages.length
+  let activePageId: string | undefined
+  if (input.currentPage) {
+    const ref = input.currentPage
+    const tab = await getTab(ref.tabId, input.windowId).catch(() => undefined)
+    if (tab?.active && pageOrigin(tab.url ?? "") === ref.origin) {
+      const existing = pages.find(page => page.tabId === ref.tabId)
+      if (existing) activePageId = existing.id
+      else if (pages.length < 12) {
+        const page = referencePage(ref, tab)
+        pages.push(page)
+        activePageId = page.id
+        if (await chrome.permissions.contains({ origins: [hostPattern(ref.origin)] })) origins.add(ref.origin)
+      }
+    }
+  }
   if (!owners.has(owner)) throw new Error("侧栏已关闭")
   const fixedCount = requestedSourceCount(task)
   const now = Date.now()
@@ -129,9 +146,10 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
   const run: RunState = {
     id, session, owner, windowId: input.windowId,
     conversationId: previous ? conversationId(previous) : id,
-    references: explicit ? pages.map(page => page.title) : undefined,
-    task, provider: input.provider, pageAction: input.pageAction, startUrl, pages, allowedOrigins: [...origins],
-    criteria: { sourceCount: fixedCount ?? Math.max(pages.length, 1), topics: [] },
+    references: pages.length ? pages.map(page => page.title) : undefined,
+    task, provider: input.provider, model: input.model, pageAction: input.pageAction, startUrl, pages, activePageId,
+    allowedOrigins: [...origins],
+    criteria: { sourceCount: fixedCount ?? Math.max(explicitCount, 1), topics: [] },
     fixedCount, evidence: inherited, events: [], tokens: 0, steps: 0,
     createdAt: now, updatedAt: now, status: "running",
   }
@@ -246,6 +264,8 @@ async function commandFor(owner: string, command: PanelCommand): Promise<unknown
         } else {
           run.status = "complete"
           run.answer = command.text.trim().slice(0, 32_000)
+          run.report = undefined
+          run.reason = undefined
         }
         run.owner = undefined
       }))
@@ -258,15 +278,20 @@ async function commandFor(owner: string, command: PanelCommand): Promise<unknown
         run.report = evidenceDraft(run.id, run.evidence, command.reason)
         addEvent(run, "保留部分结果", command.reason)
       }))
-    case "export_start":
-      return announce(await changeRun(command.id, run => {
-        if (!run.report) throw new Error("这条任务暂无可保存报告")
+    case "export_start": {
+      const run = await changeRun(command.id, run => {
+        if (!run.report && !run.answer) throw new Error("这条任务暂无可保存内容")
         if (run.status === "running") throw new Error("请先暂停或等待任务完成")
-        if (command.automatic && (run.status !== "complete" || !run.report.complete || run.download)) throw new Error("报告当前不能自动下载")
+        if (command.automatic && (!requestsMarkdown(run.task) || run.status !== "complete" ||
+          (!run.answer && !run.report?.complete) || run.download)) throw new Error("当前结果不能自动下载")
         if (run.download?.state === "pending" || run.download?.state === "in_progress") throw new Error("上一项下载尚未结束")
         run.download = { attempt: crypto.randomUUID(), owner, state: "pending" }
         addEvent(run, "请求保存 Markdown")
-      }))
+      })
+      const artifact = run.answer ? replyMarkdown(run.id, run.task, run.answer) : run.report!
+      announce(run)
+      return { attempt: run.download!.attempt, filename: artifact.filename, markdown: artifact.markdown } satisfies MarkdownExport
+    }
     case "export_record": {
       const downloadId = command.downloadId
       const run = await changeRun(command.id, current => {

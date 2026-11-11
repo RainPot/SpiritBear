@@ -34,6 +34,10 @@ function fileName(title: string, runId: string): string {
   return (safe || "网页资料") + "-" + runId.slice(0, 8) + ".md"
 }
 
+export function replyMarkdown(runId: string, task: string, answer: string): Pick<Artifact, "filename" | "markdown"> {
+  return { filename: fileName(task, runId), markdown: answer.trim() + "\n" }
+}
+
 function renderArtifact(runId: string, title: string, sections: string[], sources: Evidence[], gaps: string[]): Artifact {
   const sourceList = sources.map((source, index) =>
     String(index + 1) + ". [" + markdownText(source.title) + "](<" + source.url + ">)")

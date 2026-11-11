@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import type { ModelChoice, ModelConnection } from "../../src/agent/settings"
 import { pageOrigin } from "../../src/browser/urls"
-import { pageActionLabels, type PageAction, type PageRef } from "../../src/run/state"
+import { requestsMarkdown } from "../../src/run/intent"
+import { pageActionLabels, type PageRef, type StartInput } from "../../src/run/state"
 
+export type ComposeMessage = Omit<StartInput, "provider" | "model" | "previousRunId" | "windowId"> & { windowId?: number }
 interface Props {
-  disabled: boolean
-  providerLabel: string
-  onSend: (task: string, references: PageRef[], startUrl: string, windowId?: number, pageAction?: PageAction) => void
+  busy: boolean
+  hidden: boolean
+  running: boolean
+  connections: ModelConnection[]
+  model?: ModelChoice
+  onModel: (model: ModelChoice) => void
+  onSettings: () => void
+  onPause: () => void
+  onSend: (message: ComposeMessage) => void
 }
 
 const mentionPattern = /@([^@\s，。]*)$/
@@ -16,13 +25,16 @@ function tabReference(tab: chrome.tabs.Tab): PageRef | undefined {
   return { tabId: tab.id, origin, title: tab.title || new URL(origin).hostname }
 }
 
-export function Compose({ disabled, providerLabel, onSend }: Props) {
+const modelKey = (choice: ModelChoice) => JSON.stringify([choice.provider, choice.model])
+
+export function Compose({ busy, hidden, running, connections, model, onModel, onSettings, onPause, onSend }: Props) {
   const [task, setTask] = useState("")
   const [startUrl, setStartUrl] = useState("")
   const [showUrl, setShowUrl] = useState(false)
   const [refs, setRefs] = useState<PageRef[]>([])
   const [tabs, setTabs] = useState<PageRef[]>([])
   const [activeTab, setActiveTab] = useState<{ page: PageRef; windowId: number }>()
+  const [dismissedTab, setDismissedTab] = useState<number>()
   const [windowId, setWindowId] = useState<number>()
   const [picker, setPicker] = useState(false)
   const [mention, setMention] = useState<{ start: number; end: number; term: string }>()
@@ -31,6 +43,9 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
   const editor = useRef<HTMLTextAreaElement>(null)
 
   const term = mention?.term.toLowerCase() ?? ""
+  const current = activeTab && activeTab.page.tabId !== dismissedTab ? activeTab.page : undefined
+  const auto = current && refs.length < 12 && !refs.some(ref => ref.tabId === current.tabId) ? current : undefined
+  const available = connections.filter(item => item.connected)
   const matches = tabs.filter(tab => !refs.some(ref => ref.tabId === tab.tabId) &&
     (tab.title.toLowerCase().includes(term) || tab.origin.includes(term))).slice(0, 10)
 
@@ -87,8 +102,8 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
 
   function submit(event?: FormEvent) {
     event?.preventDefault()
-    if (disabled || !task.trim()) return
-    onSend(task, refs, startUrl, windowId)
+    if (busy || running || !task.trim()) return
+    onSend({ task, references: refs, currentPage: current, startUrl, windowId: windowId ?? activeTab?.windowId })
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -112,13 +127,15 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
     }
   }
 
-  return <div className="composer">
+  return <div className="composer" hidden={hidden}>
     {activeTab && !task && !refs.length && !startUrl && !picker &&
       <div className="page-shortcuts" role="group" aria-label="网页快捷操作">
         {(["summarize", "translate"] as const).map(action =>
-          <button key={action} type="button" className="secondary small" disabled={disabled}
+          <button key={action} type="button" className="secondary small" disabled={busy || running}
             title={activeTab.page.title}
-            onClick={() => onSend(pageActionLabels[action], [activeTab.page], "", activeTab.windowId, action)}>
+            onClick={() => onSend({
+              task: pageActionLabels[action], references: [activeTab.page], windowId: activeTab.windowId, pageAction: action,
+            })}>
             {pageActionLabels[action]}
           </button>)}
       </div>}
@@ -130,18 +147,25 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
       {!matches.length && <p className="empty">{pickerError || "当前窗口没有匹配的 HTTPS 标签页。"}</p>}
     </div>}
     <form className="compose" onSubmit={submit}>
-      {refs.length > 0 && <ul className="reference-list" aria-label="已选参考标签页">
+      {(auto || refs.length > 0) && <ul className="reference-list" aria-label="已选参考标签页">
+        {auto && <li>
+          <span title={auto.title}><strong>当前页</strong> · {auto.title}</span>
+          <button type="button" aria-label="移除当前标签页" onClick={() => setDismissedTab(auto.tabId)}>×</button>
+        </li>}
         {refs.map(tab => <li key={tab.tabId}>
           <span title={tab.origin}>@ {tab.title}</span>
-          <button type="button" aria-label={"移除 " + tab.title} onClick={() => setRefs(current => current.filter(ref => ref.tabId !== tab.tabId))}>×</button>
+          <button type="button" aria-label={"移除 " + tab.title} onClick={() => {
+            if (tab.tabId === current?.tabId) setDismissedTab(tab.tabId)
+            setRefs(items => items.filter(ref => ref.tabId !== tab.tabId))
+          }}>×</button>
         </li>)}
       </ul>}
       {showUrl && <label className="field url-field">起始网址
-        <input type="url" value={startUrl} onChange={event => setStartUrl(event.target.value)} placeholder="https://example.com" disabled={disabled} />
+        <input type="url" value={startUrl} onChange={event => setStartUrl(event.target.value)} placeholder="https://example.com" disabled={busy} />
       </label>}
-      <textarea ref={editor} aria-label="任务指令" value={task} maxLength={6000} disabled={disabled}
+      <textarea ref={editor} aria-label="任务指令" value={task} maxLength={6000} disabled={busy}
         aria-controls={picker ? "tab-options" : undefined} rows={2}
-        placeholder="发消息，输入 @ 引用标签页"
+        placeholder={running ? "可以先写下一条消息" : "问个问题，或交给我一个网页任务"}
         onKeyDown={onKeyDown}
         onChange={event => {
           const value = event.target.value
@@ -157,16 +181,27 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
             setPicker(false)
           }
         }} />
+      {requestsMarkdown(task) && <p className="export-intent">完成后自动下载 Markdown</p>}
       <div className="composer-footer">
         <div className="composer-tools">
-          <button type="button" className="plain small mention-button" disabled={disabled || refs.length >= 12}
+          <button type="button" className="plain small mention-button" disabled={busy || refs.length >= 12}
             aria-expanded={picker} onClick={() => picker ? setPicker(false) : void openPicker()}>@ 标签页</button>
-          <button type="button" className="plain small" disabled={disabled}
+          <button type="button" className="plain small" disabled={busy}
             aria-expanded={showUrl} onClick={() => setShowUrl(!showUrl)}>网址</button>
         </div>
         <div className="send-group">
-          <span className="provider-name">{providerLabel}</span>
-          <button className="primary send" type="submit" disabled={disabled || !task.trim()}>发送</button>
+          {model ? <select className="model-picker" aria-label="对话模型" title={model.model} disabled={busy || running}
+            value={modelKey(model)} onChange={event => {
+              const [provider, model] = JSON.parse(event.target.value) as [ModelChoice["provider"], string]
+              onModel({ provider, model })
+            }}>
+            {available.map(({ profile }) => <optgroup key={profile.id} label={profile.label}>
+              {profile.models.map(model => <option key={model} value={modelKey({ provider: profile.id, model })}>{model}</option>)}
+            </optgroup>)}
+          </select> : <button type="button" className="plain small" disabled={busy} onClick={onSettings}>连接模型</button>}
+          {running ? <button type="button" className="secondary send stop" aria-label="暂停当前任务" disabled={busy} onClick={onPause}>
+            <span aria-hidden="true" />暂停
+          </button> : <button className="primary send" type="submit" disabled={busy || !task.trim()}>发送</button>}
         </div>
       </div>
     </form>

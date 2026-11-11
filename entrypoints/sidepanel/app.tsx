@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react"
-import { providerLabels, type ProviderId, type ProviderProfile } from "../../src/agent/provider"
-import { providerForRun } from "../../src/agent/settings"
+import type { ProviderProfile } from "../../src/agent/provider"
+import { providerForRun, readModelSettings, type ModelChoice } from "../../src/agent/settings"
 import { hostPattern, pageOrigin } from "../../src/browser/urls"
 import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
-import { runAgent } from "../../src/run/loop"
-import { conversationId, type PageAction, type PageRef, type RunHistory, type RunState } from "../../src/run/state"
-import { Compose } from "./compose"
+import { requestsMarkdown } from "../../src/run/intent"
+import { conversationId, type RunHistory, type RunState } from "../../src/run/state"
+import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
 import { Settings } from "./settings"
 import { SiteGuides } from "./site-guides"
@@ -17,7 +17,7 @@ function message(error: unknown): string {
 
 export function App() {
   const [section, setSection] = useState<"chat" | "settings">("chat")
-  const [provider, setProvider] = useState<ProviderId>("openai")
+  const [models, setModels] = useState<Awaited<ReturnType<typeof readModelSettings>>>({ connections: [] })
   const [runs, setRuns] = useState<RunState[]>([])
   const [session, setSession] = useState<string>()
   const [threadId, setThreadId] = useState<string>()
@@ -32,7 +32,8 @@ export function App() {
   const followTail = useRef(true)
   const turns = runs.filter(item => conversationId(item) === threadId).reverse()
   const last = turns.at(-1)
-  const running = runs.some(item => item.status === "running")
+  const runningRun = runs.find(item => item.status === "running")
+  const running = Boolean(runningRun)
   const threads = new Map<string, RunState>()
   for (const item of runs) {
     const id = conversationId(item)
@@ -67,9 +68,8 @@ export function App() {
       const newest = history.find(item => item.status === "running") ?? history[0]
       if (newest) setThreadId(conversationId(newest))
     }, error => { if (active) setError(message(error)) })
-    void chrome.storage.local.get("selectedProvider").then(({ selectedProvider }) => {
-      if (active && (selectedProvider === "openai" || selectedProvider === "deepseek")) setProvider(selectedProvider)
-    })
+    void readModelSettings().then(value => { if (active) setModels(value) },
+      error => { if (active) setError(message(error)) })
     return () => {
       active = false
       runner.current?.controller.abort()
@@ -102,8 +102,10 @@ export function App() {
     }, 18_000)
     const done = (async () => {
       try {
+        const { runAgent } = await import("../../src/run/loop")
         const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal, history)
-        if (!controller.signal.aborted && finished.status === "complete" && finished.report?.complete) {
+        if (!controller.signal.aborted && finished.status === "complete" && requestsMarkdown(finished.task) &&
+          (finished.answer || finished.report?.complete)) {
           await saveMarkdown(client, finished.id, true)
         }
       } catch (error) {
@@ -119,12 +121,18 @@ export function App() {
     runner.current = { id: initial.id, controller, done }
   }
 
-  function send(task: string, references: PageRef[], rawUrl: string, windowId?: number, pageAction?: PageAction) {
+  function send(draft: ComposeMessage) {
     if (lock.current || running) return
+    const selected = models.selected
+    if (!selected) {
+      setSection("settings")
+      setError("")
+      return
+    }
     let permission: Promise<boolean>
-    const startUrl = rawUrl.trim() || undefined
+    const startUrl = draft.startUrl?.trim() || undefined
     try {
-      const origins = new Set(references.map(ref => ref.origin))
+      const origins = new Set(draft.references.map(ref => ref.origin))
       if (startUrl) {
         const origin = pageOrigin(startUrl)
         if (!origin) throw new Error("起始网址须为 Chrome 可访问的 HTTPS 网页")
@@ -139,12 +147,12 @@ export function App() {
     }
     withAction(async client => {
       if (!await permission) throw new Error("Chrome 未授予任务站点权限")
-      const configuration = await providerForRun(provider)
-      const currentWindowId = windowId ?? (await chrome.windows.getCurrent()).id
+      const configuration = await providerForRun(selected.provider, selected.model)
+      const currentWindowId = draft.windowId ?? (await chrome.windows.getCurrent()).id
       if (currentWindowId === undefined) throw new Error("无法确定当前浏览器窗口")
       const started = await client.request<RunState>({
         kind: "start",
-        input: { windowId: currentWindowId, task, provider, references, pageAction, startUrl, previousRunId: last?.id },
+        input: { ...draft, windowId: currentWindowId, ...selected, startUrl, previousRunId: last?.id },
       })
       followTail.current = true
       updateRun(started)
@@ -169,7 +177,7 @@ export function App() {
   }
 
   async function continueRun(client: PanelClient, selected: RunState) {
-    const configuration = await providerForRun(selected.provider)
+    const configuration = await providerForRun(selected.provider, selected.model)
     const resumed = await client.request<RunState>({ kind: "resume", id: selected.id })
     updateRun(resumed)
     launch(client, resumed, configuration, turns.filter(item => item.id !== selected.id))
@@ -195,9 +203,9 @@ export function App() {
     followTail.current = true
   }
 
-  function selectProvider(value: ProviderId) {
-    setProvider(value)
-    void chrome.storage.local.set({ selectedProvider: value })
+  function selectModel(value: ModelChoice) {
+    setModels(current => ({ ...current, selected: value }))
+    void chrome.storage.local.set({ selectedModel: value }).catch(error => setError(message(error)))
   }
 
   return <main className="shell">
@@ -229,16 +237,16 @@ export function App() {
     </section>}
     {error && <p className="notice warning top-notice" role="alert">{error}</p>}
     {section === "settings" ? <div className="settings-body">
-      <Settings provider={provider} onProvider={selectProvider} />
+      <Settings connections={models.connections} onChanged={async () => setModels(await readModelSettings())} />
       <SiteGuides />
-    </div> : <>
+    </div> :
       <div className="transcript" ref={transcript} onScroll={event => {
         const element = event.currentTarget
         followTail.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70
       }}>
         {!turns.length && <div className="welcome">
-          <h1>你想在浏览器里做什么？</h1>
-          <p>输入消息开始对话。用 <strong>@</strong> 引用标签页，让助手查网页、整理来源或保存报告。</p>
+          <h1>在浏览器里做什么？</h1>
+          <p>提问、读网页或找资料。用 <strong>@</strong> 加入其他标签页。</p>
         </div>}
         {turns.map(run => <section className="turn" key={run.id} aria-label="对话轮次">
           <div className="user-message">
@@ -248,7 +256,6 @@ export function App() {
             <p>{run.task}</p>
           </div>
           <RunView run={run} current={run.id === last?.id} live={run.session === session} busy={busy}
-            pause={() => pauseRun(run)}
             takeOver={() => pauseRun(run, true)}
             resume={() => withAction(client => continueRun(client, run))}
             authorize={() => authorize(run)}
@@ -257,7 +264,10 @@ export function App() {
             cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))} />
         </section>)}
       </div>
-      <Compose key={draftVersion} disabled={busy || running} providerLabel={providerLabels[provider]} onSend={send} />
-    </>}
+    }
+    <Compose key={draftVersion} busy={busy} hidden={section !== "chat"} running={running}
+      connections={models.connections} model={models.selected} onModel={selectModel}
+      onSettings={() => { setSection("settings"); setShowHistory(false); setError("") }}
+      onPause={() => { if (runningRun) pauseRun(runningRun) }} onSend={send} />
   </main>
 }

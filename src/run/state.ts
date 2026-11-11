@@ -43,6 +43,7 @@ export interface RunState {
   windowId: number
   task: string
   provider: ProviderId
+  model?: string
   pageAction?: PageAction
   startUrl?: string
   criteria: Criteria
@@ -51,6 +52,7 @@ export interface RunState {
   searchAttempt?: { pageId: string; query: string; before: SearchSnapshot }
   searchResult?: { url: string; title: string }
   pages: RunPage[]
+  activePageId?: string
   allowedOrigins: string[]
   groupId?: number
   focusTabId?: number
@@ -73,7 +75,9 @@ export interface StartInput {
   windowId: number
   task: string
   provider: ProviderId
+  model?: string
   references: PageRef[]
+  currentPage?: PageRef
   pageAction?: PageAction
   previousRunId?: string
   startUrl?: string
@@ -104,6 +108,12 @@ export interface RunHistory {
 export interface ToolResult {
   run: RunState
   output: unknown
+}
+
+export interface MarkdownExport {
+  attempt: string
+  filename: string
+  markdown: string
 }
 
 export interface PanelRequest {

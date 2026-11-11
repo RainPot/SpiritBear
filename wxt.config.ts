@@ -7,7 +7,7 @@ export default defineConfig({
     action: { default_title: "打开 TabErrand" },
     icons: { 16: "icon/16.png", 32: "icon/32.png", 48: "icon/48.png", 128: "icon/128.png" },
     permissions: ["sidePanel", "tabs", "tabGroups", "scripting", "storage", "downloads"],
-    optional_host_permissions: ["https://*/*"],
+    optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
     incognito: "not_allowed",
   },
 })

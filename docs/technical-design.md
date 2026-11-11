@@ -4,14 +4,14 @@
 
 ## 1. 首版交付
 
-TabErrand 是一个运行在用户现有 Chrome 中的浏览器 Agent。侧栏以对话为入口。用户可以直接提问，也可以用 `@` 指定已打开的参考标签页。Agent 在专用任务标签页中搜索、筛选和阅读，整理出一份可按链接核对的 Markdown。第一个真实场景是从小红书搜索前端面经，按主题归纳并下载。
+TabErrand 是一个运行在用户现有 Chrome 中的浏览器 Agent。侧栏以对话为入口，可以直接提问、阅读当前页，或在专用任务标签页里搜索、筛选和阅读。需要交付文件时，可以把结果导出成 Markdown。
 
 | 已确认的决策 | 对首版的要求 |
 | --- | --- |
 | 纯 Chrome 扩展 | 使用 Manifest V3，安装和运行只依赖 Chrome。 |
 | 先做搜索与整理 | 执行导航、搜索输入、筛选、滚动、阅读和归纳。登录、验证码及正式提交交给用户。 |
 | 两家模型验收 | 用 OpenAI 和 DeepSeek 跑同一条任务，两家都使用 Chat Completions 工具调用。 |
-| 自动保存与手动另存 | 默认保存完整报告到 Chrome 下载目录，侧栏保留预览和「另存为」。 |
+| 按需导出 | 默认交付对话回复。明确要求保存时自动下载完整结果，也可从回复下方手动另存。 |
 
 **首版完成的定义**是用户能在普通 Chrome 窗口发起任务，看到实际浏览过程，从生成的文件核对指定主题、资料数量和来源。遇到网站限制时，侧栏能指出卡在哪一步，并展示已采集的材料。小红书能否走通以真实网页验证为准。
 
@@ -29,7 +29,7 @@ TabErrand 是一个运行在用户现有 Chrome 中的浏览器 Agent。侧栏�
 
 ```mermaid
 flowchart TB
-  Panel["侧栏与 Agent 循环"] <-->|模型请求| Model["OpenAI / DeepSeek"]
+  Panel["React 侧栏与 LangGraph.js"] <-->|Chat Completions| Model["OpenAI / DeepSeek / 兼容端点"]
   Panel <-->|工具请求与事件| Worker["Service Worker"]
   Worker <-->|观察与回执| Page["标签页观察器"]
   Worker -->|状态与证据| Store["IndexedDB"]
@@ -39,7 +39,7 @@ flowchart TB
 
 | 组件 | 职责 |
 | --- | --- |
-| 侧栏 | 收集任务、选择参考页和模型、发起授权，运行 Agent 循环，呈现事件、接管入口和 Markdown。 |
+| 侧栏 | 收集消息和标签页上下文、切换模型、发起授权，执行 LangGraph 状态图并呈现每轮进度与结果。 |
 | Service Worker | 管理任务标签组和运行状态，校验并派发工具请求，接收浏览器事件，记录下载状态。每次调用只处理一个短操作。 |
 | 标签页观察器 | 按需注入已授权文档，读取可见文本与控件，执行浏览动作并返回回执。 |
 | 模型适配器 | 发送模型请求，把供应商响应转换成工具调用或报告草稿，归一化错误和用量。 |
@@ -49,17 +49,27 @@ MVP 使用 TypeScript、WXT 和 React。WXT 负责构建 Manifest V3 的侧栏�
 
 ## 3. 标签页与授权
 
-**`@` 选择的是当前普通窗口的一张真实标签页。** 侧栏列出支持的 HTTPS 页面的标题和域名。选中时创建引用，绑定 `tabId`、`windowId` 和选择时的源。发送任务时重新检查引用，已关闭或跨源跳转的引用需要重新选择。同源页面以发起时可见内容为准。
+当前普通窗口的活动 HTTPS 页默认作为参考页，可以在发送前移除。`@` 从同一窗口补充其他标签页。发送时核对 `tabId`、`windowId` 和源。自动参考页已失效时跳过该引用，手动选择的参考页已关闭或跨源跳转时提示重新选择。
 
-- **参考页**提供用户主动选择的上下文。任务可引用多页，读取时逐页核对站点授权。参考页的阅读发生在原页，搜索或筛选在专用任务标签页执行。
+- **参考页**提供当前页和手动引用的上下文。自动参考只登记标题与站点，首次读取或复制未授权的当前页时按需请求权限。参考页的阅读发生在原页，搜索或筛选在专用任务标签页执行。
 - **任务页**由扩展创建并分组，通常以后台标签页打开。运行中的动作绑定任务自己的页。任务结束后留给用户核对，清理入口只关闭该任务创建的页。
 - **站点范围**由用户选择的参考页和授权的目标站点确定。打开链接跨到新域时，侧栏展示目标域并请求授权。已有站点授权可以复用，任务仍要在自己的站点范围内运行。标签页变化、权限撤销或站点阻止访问时，侧栏显示可继续的操作。
 
-`tabs` 用于列出当前窗口标题和 URL，`tabGroups` 用于命名任务组，`sidePanel`、`scripting`、`storage`、`downloads` 分别用于界面、注入、状态和导出。Manifest 声明可选 HTTPS 主机范围，具体站点和模型 API 主机分别在用户点击授权时申请。`activeTab` 的临时权限绑定被用户调用时的活动标签页，无法覆盖任意被 `@` 引用的后台页或任务新页。 [Chrome Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs/) · [可选权限](https://developer.chrome.com/docs/extensions/reference/api/permissions) · [activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)
+`tabs` 用于列出当前窗口标题和 URL，`tabGroups` 用于命名任务组，`sidePanel`、`scripting`、`storage`、`downloads` 分别用于界面、注入、状态和导出。站点与远程模型 API 使用可选 HTTPS 主机权限。本机兼容模型可单独授权 `localhost` 或 `127.0.0.1` 的 HTTP。 [Chrome Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs/) · [可选权限](https://developer.chrome.com/docs/extensions/reference/api/permissions)
 
 ## 4. 观察、决策与动作回执
 
-Agent 在一次任务中重复「观察页面 → 请求模型 → 派发一项工具 → 获取回执和最新观察」。任务开始时抽取检索词、主题、目标来源数量和输出要求，并在侧栏显示。站点或范围不明确时，先让用户补充必要信息。
+侧栏在第一次发送时加载 LangGraph.js 的浏览器入口。每轮对话通过 `StateGraph` 在模型请求、工具执行和交付结果之间流转。一次模型响应中的工具按顺序派发给 Worker，每个工具都等待回执。Worker 持久化任务状态和证据，恢复时用最近状态重新启动状态图。 [LangGraph.js Graph API](https://docs.langchain.com/oss/javascript/langgraph/graph-api)
+
+```mermaid
+flowchart LR
+  A["发送消息"] --> B["请求模型"]
+  B -->|"工具调用"| C["Worker 执行并返回回执"]
+  C -->|"继续处理"| B
+  C -->|"暂停、接管或报告完成"| E["更新对话"]
+  B -->|"文本回复或达到上限"| D["交付结果"]
+  D --> E
+```
 
 模型请求包含最新消息、同一对话近期回复、当前页的观察、证据目录和近期工具结果。追问可以复用上一轮的来源。只在一轮工具调用及其回执完整返回后压缩旧上下文，保留原始目标和证据 ID。恢复任务时从运行状态和证据重建请求。
 
@@ -111,18 +121,17 @@ type ActionReceipt = {
 
 Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器会话中手动恢复时，任务重用已采集证据，依据新观察制定下一步。任务页面的绑定只在原会话有效。
 
-## 5. 两个模型厂商共用一套工具
+## 5. 模型连接与选择
 
-配置项为 `providerId`、`baseUrl`、`modelId` 和会话 API Key。内置 OpenAI 与 DeepSeek 两个配置预设。首版使用非流式 Chat Completions，操作进度由本地事件更新。OpenAI 预设默认 `gpt-4.1-mini`。DeepSeek 预设默认 `deepseek-flash`，请求使用非思考模式。两家都支持从设置页修改模型 ID 与 Base URL。
+每个连接包含名称、Base URL、模型 ID 列表和会话 API Key。内置 OpenAI 和 DeepSeek，也能添加多个 OpenAI 兼容端点。设置页先验证连接和首个模型的工具调用能力，对话输入框列出已连接的模型。本轮任务使用发起时所选模型，操作进度由本地事件更新。
 
 | 预设 | Base URL | 工具协议 |
 | --- | --- | --- |
 | OpenAI | `https://api.openai.com/v1` | Chat Completions 的 `tools`、`tool_calls` 和工具结果。 |
 | DeepSeek | `https://api.deepseek.com` | 同一消息形状，按供应商配置调整可选参数。 |
+| 自定义 | 由用户填写 | 兼容 Chat Completions 的 HTTPS 或本机 HTTP 接口。 |
 
 适配器负责请求鉴权、字段映射和错误处理。运行器把工具返回值配回原始 `tool_call_id`。模型同一轮返回多项调用时，逐项校验并按序处理，过期观察返回需要重新读取的错误，再把各项结果一起交回模型。配置页用一条无页面数据的工具调用检测连通性和工具能力。连接、限流或协议异常会指出出错环节。本轮任务固定使用所选供应商。 [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) · [DeepSeek API 接入](https://api-docs.deepseek.com/) · [DeepSeek Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)
-
-后续可在相同工具和任务接口上扩展更多兼容端点，或增加 Anthropic、Gemini 的原生适配。每个新预设以同一套协议测试和网页任务验收。
 
 ## 6. 来源、最终验收与本地文件
 
@@ -130,7 +139,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 **最后由 Checker 验收任务目标。** 规则核对去重后的来源数量、用户要求的主题结构和每条归纳是否引用已有证据。用户明确要求使用网页搜索框时，Checker 同时核对输入派发和搜索后的新页面观察。缺少该证据时，Agent 收到补做搜索的反馈。来源不足或字段缺失时展示部分结果和原因。相关性与摘要是否忠实于原文另用人工标注样本评测，报告结构检查不能替代语义评测。
 
-下载流程由扩展执行。侧栏把报告生成 UTF-8 Markdown Blob，通过 `chrome.downloads.download` 下载到 Chrome 默认目录下的 `TabErrand/`，同名文件由 Chrome 追加后缀。「另存为」使用 `saveAs: true`。下载开始后保存 `downloadId`，同时监听状态变化并查询该 ID，覆盖下载先完成、回执后登记的情况。看到 `complete` 才展示实际文件名和「在文件夹中显示」。 [Chrome Downloads API](https://developer.chrome.com/docs/extensions/reference/api/downloads)
+普通任务以对话回复结束。侧栏识别用户的保存指令并在发送前展示自动下载提示，Worker 在创建自动下载时复核意图和结果状态。手动保存可导出纯文本回复或已有报告。下载使用 UTF-8 Markdown Blob 和 `chrome.downloads.download`，自动保存到 Chrome 默认目录下的 `TabErrand/`。「另存为」使用 `saveAs: true`。Worker 用 `downloadId` 对账后显示实际文件名与「在文件夹中显示」。 [Chrome Downloads API](https://developer.chrome.com/docs/extensions/reference/api/downloads)
 
 | 结果 | 侧栏表现 |
 | --- | --- |
@@ -141,7 +150,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 ## 7. 数据流与执行范围
 
-- API Key 放在扩展受信任上下文的 `chrome.storage.session`，浏览器重启或扩展重载后重新输入。Provider 只向用户配置并授权的 HTTPS API 发送密钥，拒绝将鉴权请求重定向到其他地址。 [Chrome Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage) · [扩展跨源请求](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
+- API Key 放在扩展受信任上下文的 `chrome.storage.session`，浏览器重启或扩展重载后重新连接。密钥绑定到配置时的 API 地址，网络请求只发送到该地址。 [Chrome Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage) · [扩展跨源请求](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
 - 模型收到任务、相关可见文本和有限的工具结果。标签目录、浏览器凭据、表单值和完整 DOM 留在本机。页面文字作为资料处理，执行层以用户授权和工具 schema 决定可派发的动作。
 - 本地 IndexedDB 保存必要证据、草稿和事件。保留最近 20 次任务，侧栏的本地任务记录提供清除入口。事件记录动作、耗时和结果，URL 中的敏感参数及模型密钥需要脱敏。
 - 工具限定普通 HTTPS 浏览和查询控件。发布、支付、删除和正式提交由用户操作。模型响应经过 schema 解析，扩展内的 Markdown 预览转义 HTML，链接只接受 HTTPS。

@@ -1,4 +1,6 @@
 import Markdown from "react-markdown"
+import { replyMarkdown } from "../../src/agent/report"
+import { requestsMarkdown } from "../../src/run/intent"
 import type { RunState } from "../../src/run/state"
 
 export function runLabel(run: RunState): string {
@@ -43,7 +45,6 @@ interface Props {
   current: boolean
   live: boolean
   busy: boolean
-  pause: () => void
   takeOver: () => void
   resume: () => void
   authorize: () => void
@@ -52,7 +53,7 @@ interface Props {
   cleanup: () => void
 }
 
-export function RunView({ run, current, live, busy, pause, takeOver, resume, authorize, focus, save, cleanup }: Props) {
+export function RunView({ run, current, live, busy, takeOver, resume, authorize, focus, save, cleanup }: Props) {
   const running = run.status === "running"
   const downloadable = run.download?.state !== "pending" && run.download?.state !== "in_progress"
   const activity = run.events.filter(event => !["开始任务", "收到消息", "模型返回"].includes(event.label))
@@ -62,6 +63,8 @@ export function RunView({ run, current, live, busy, pause, takeOver, resume, aut
   const resumable = current && live && !running && run.status !== "complete" && run.status !== "interrupted"
   const canFocus = live && run.focusTabId !== undefined && run.status !== "interrupted" &&
     (run.status !== "complete" || !taskPages.length)
+  const reply = run.answer ?? run.report?.markdown
+  const file = reply && (run.download || requestsMarkdown(run.task))
   return <article className="assistant-message" aria-label="TabErrand 回复">
     <div className="assistant-head">
       <span className="mark mini" aria-hidden="true" /><strong>TabErrand</strong>
@@ -72,8 +75,7 @@ export function RunView({ run, current, live, busy, pause, takeOver, resume, aut
       ? [newestAction.label, newestAction.detail].filter(Boolean).join(" · ")
       : "正在准备回复…"}</p>}
     {run.reason && <p className="notice warning">{run.reason}</p>}
-    {(running || resumable || canFocus) && <div className="actions">
-      {running && <button className="secondary" disabled={busy} onClick={pause}>暂停任务</button>}
+    {(resumable || canFocus) && <div className="actions">
       {running && canFocus && <button className="secondary" disabled={busy} onClick={takeOver}>接管网页</button>}
       {resumable && run.requestedOrigin &&
         <button className="primary" disabled={busy} onClick={authorize}>授权并继续</button>}
@@ -107,26 +109,27 @@ export function RunView({ run, current, live, busy, pause, takeOver, resume, aut
       <summary>执行记录{run.evidence.length
         ? " · " + run.evidence.length + " 条来源" : ""}</summary>
       <ol>
-        {activity.slice().reverse().map(event => <li key={event.id}>
+        {activity.map(event => <li key={event.id}>
           <i className={event.outcome === "rejected" || event.outcome === "unknown" ? "warn-dot" : ""} aria-hidden="true" />
           <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</span>
         </li>)}
       </ol>
     </details>}
-    {run.answer && <Reply text={run.answer} />}
-    {run.report && <>
-      <Reply text={run.report.markdown} />
-      <div className="artifact">
+    {reply && <Reply text={reply} />}
+    {reply && !file && !running && <div className="reply-actions">
+      <button className="plain small" disabled={busy} onClick={save}>保存 Markdown</button>
+    </div>}
+    {file && <div className="artifact">
         <div className="file-heading"><span className="file-mark" aria-hidden="true">MD</span>
           <div><strong>Markdown 文件</strong><p className="file-name">
-            {run.download?.filename?.split(/[\\/]/).pop() || run.report.filename}</p></div>
+            {run.download?.filename?.split(/[\\/]/).pop() || run.report?.filename ||
+              replyMarkdown(run.id, run.task, reply).filename}</p></div>
         </div>
         <div className="actions">
           <button className="secondary" disabled={busy || running || !downloadable} onClick={save}>另存为</button>
           {run.download?.state === "complete" && run.download.id !== undefined &&
             <button className="secondary" onClick={() => chrome.downloads.show(run.download!.id!)}>在文件夹中显示</button>}
         </div>
-      </div>
-    </>}
+    </div>}
   </article>
 }

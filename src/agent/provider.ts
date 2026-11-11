@@ -1,8 +1,8 @@
 import { z } from "zod"
-import { httpsUrl } from "../browser/urls"
 import type { ToolDefinition } from "./contracts"
 
-export type ProviderId = "openai" | "deepseek"
+export type BuiltinProviderId = "openai" | "deepseek"
+export type ProviderId = BuiltinProviderId | `custom:${string}`
 
 export interface ProviderProfile {
   id: ProviderId
@@ -10,19 +10,36 @@ export interface ProviderProfile {
   model: string
 }
 
-export const providers: Record<ProviderId, ProviderProfile> = {
+export const providers: Record<BuiltinProviderId, ProviderProfile> = {
   openai: { id: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
   deepseek: { id: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
 }
 
 export const providerLabels = { openai: "OpenAI", deepseek: "DeepSeek" }
 
+export function isBuiltinProvider(value: unknown): value is BuiltinProviderId {
+  return value === "openai" || value === "deepseek"
+}
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return isBuiltinProvider(value) || (typeof value === "string" && /^custom:[a-z0-9-]{1,80}$/.test(value))
+}
+
 export function completionEndpoint(baseUrl: string): URL {
-  const endpoint = httpsUrl(baseUrl.trim())
+  const endpoint = new URL(baseUrl.trim())
+  const loopback = endpoint.protocol === "http:" && ["localhost", "127.0.0.1"].includes(endpoint.hostname)
+  if ((endpoint.protocol !== "https:" && !loopback) || endpoint.username || endpoint.password) {
+    throw new Error("API 地址须使用 HTTPS 或本机 HTTP，且不含凭据")
+  }
   if (endpoint.search || endpoint.hash) throw new Error("API Base URL 请使用不含查询或片段的地址")
   const path = endpoint.pathname.replace(/\/+$/, "")
   endpoint.pathname = path.endsWith("/chat/completions") ? path : path + "/chat/completions"
   return endpoint
+}
+
+export function modelHostPattern(baseUrl: string): string {
+  const endpoint = completionEndpoint(baseUrl)
+  return endpoint.protocol + "//" + endpoint.hostname + "/*"
 }
 
 const toolCallSchema = z.object({
@@ -73,7 +90,7 @@ export async function completeChat(
   try {
     response = await fetcher(endpoint.href, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}) },
       credentials: "omit",
       redirect: "error",
       cache: "no-store",
