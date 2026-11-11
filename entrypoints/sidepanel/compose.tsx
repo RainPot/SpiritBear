@@ -78,7 +78,7 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
 
   useEffect(() => {
     if (hidden || busy || !focusWhenReady.current) return
-    editor.current?.focus()
+    if (document.hasFocus()) editor.current?.focus()
     focusWhenReady.current = false
   }, [hidden, busy])
 

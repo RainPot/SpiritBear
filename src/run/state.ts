@@ -52,6 +52,7 @@ export interface RunState {
   planSummary?: string
   searchAttempt?: { pageId: string; query: string; before: SearchSnapshot }
   searchResult?: { url: string; title: string }
+  pendingNavigation?: { url: string; fromPageId: string }
   pages: RunPage[]
   activePageId?: string
   allowedOrigins: string[]

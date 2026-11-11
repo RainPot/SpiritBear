@@ -11,7 +11,7 @@ export class NeedsUser extends Error {
 export class UnconfirmedAction extends Error {}
 
 type PageOperation = PageCommand extends infer Command ?
-  Command extends PageCommand ? Omit<Command, "channel" | "origin"> : never : never
+  Command extends PageCommand ? Omit<Command, "channel" | "origin" | "trigger"> : never : never
 
 export async function allowOrigin(run: RunState, url: string, tabId?: number): Promise<string> {
   const origin = pageOrigin(url)
@@ -49,6 +49,9 @@ async function settledTab(page: RunPage, windowId: number): Promise<chrome.tabs.
 export async function pageUrl(run: RunState, page: RunPage): Promise<string> {
   const tab = await settledTab(page, run.windowId)
   const url = tab.url ?? ""
+  if (tab.status === "loading" && (!url || (tab.pendingUrl && tab.pendingUrl !== url))) {
+    throw new Error("页面仍在加载，请稍后重新观察")
+  }
   if (page.role === "reference" && pageOrigin(url) !== page.origin) {
     throw new NeedsUser("参考页已跳转到其他站点，请返回原站点或重新选择引用", page.tabId)
   }
@@ -56,15 +59,39 @@ export async function pageUrl(run: RunState, page: RunPage): Promise<string> {
   return url
 }
 
+function dispatchQuietAction(trigger: string): { dispatched: boolean; navigation?: string } {
+  const originalOpen = window.open
+  const originalFocus = window.focus
+  let navigation: string | undefined
+  const captureOpen: typeof window.open = url => {
+    if (url && !navigation) {
+      try { navigation = new URL(url, document.baseURI).href } catch { /* 无效地址交给页面观察处理。 */ }
+    }
+    return null
+  }
+  const keepFocus = () => {}
+  // 只在这次扩展动作期间接住站点的开页请求，之后恢复站点原有行为。
+  try {
+    window.open = captureOpen
+    window.focus = keepFocus
+    const dispatched = !document.dispatchEvent(new Event(trigger, { cancelable: true }))
+    return { dispatched, navigation }
+  } finally {
+    if (window.open === captureOpen) window.open = originalOpen
+    if (window.focus === keepFocus) window.focus = originalFocus
+  }
+}
+
 export async function sendToPage(run: RunState, page: RunPage, operation: PageOperation): Promise<PageReply> {
   const attempts = operation.kind === "observe" ? 3 : 1
+  const trigger = operation.kind === "interact" && operation.action !== "scroll" ? "taberrand-" + crypto.randomUUID() : undefined
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const url = await pageUrl(run, page)
     const origin = new URL(url).origin
     let documentId: string
     try {
       const [result] = await chrome.scripting.executeScript({
-        target: { tabId: page.tabId }, files: ["page.js"], world: "ISOLATED",
+        target: { tabId: page.tabId }, files: ["page.js"], world: "ISOLATED", injectImmediately: true,
       })
       if (!result?.documentId) throw new Error()
       documentId = result.documentId
@@ -76,9 +103,17 @@ export async function sendToPage(run: RunState, page: RunPage, operation: PageOp
     }
 
     try {
-      return await chrome.tabs.sendMessage(page.tabId, {
-        channel: "taberrand-page", origin, ...operation,
+      const reply = await chrome.tabs.sendMessage(page.tabId, {
+        channel: "taberrand-page", origin, ...operation, ...(trigger && { trigger }),
       } satisfies PageCommand, { documentId }) as PageReply
+      if (!trigger || !reply.ok || !("prepared" in reply)) return reply
+      const [action] = await chrome.scripting.executeScript({
+        target: { tabId: page.tabId, documentIds: [documentId] }, world: "MAIN", injectImmediately: true,
+        func: dispatchQuietAction, args: [trigger],
+      })
+      if (!action?.result?.dispatched) return { ok: false, reason: "页面或控件已变化，请重新观察" }
+      const url = action.result.navigation
+      return { ok: true, dispatched: true, navigation: url && url.length <= 2048 && pageOrigin(url) ? url : undefined }
     } catch {
       if (operation.kind === "interact") throw new UnconfirmedAction("页面在派发后失联，请先重新观察")
       // 导航可能在注入与读取之间换掉文档。只重试观察，保留已派发动作的真实回执。

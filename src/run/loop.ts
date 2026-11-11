@@ -16,8 +16,8 @@ const systemPrompt = [
   "有多来源检索目标或指定报告主题时，用 plan_task 记录主题、用户要求的资料数量和分节名称。正文要点数不等于来源数。已存在的计划应沿用。",
   "plan_task 的 summary 用一句自然的话告诉用户准备查什么、如何核对。只描述可见的计划和依据。",
   "页面目录里的 reference 是只读参考。搜索或筛选前，用 open_page 的 fromPageId 在任务组打开入口。无参考页时可使用指定的起始网址。",
-  "先观察页面再选控件。使用返回的 pageId、observationId 和 elementId。interact 只用于搜索、筛选、滚动。派发后重新观察。状态未知时先观察，避免重复原动作。",
-  "用户明确要求使用网页搜索框时，必须在任务页用 interact 的 search 动作输入关键词，再观察该页的搜索结果。即使已知原文网址，也按此顺序查找。",
+  "先观察页面再选控件。使用返回的 pageId、observationId 和 elementId。interact 只用于搜索、筛选、滚动。打开页面或派发动作后，观察回执中返回的 pageId。状态未知时先观察，避免重复原动作。",
+  "用户明确要求使用网页搜索框时，必须在任务页用 interact 的 search 动作输入关键词，再观察搜索结果。搜索可能打开新页。优先读取待核对的搜索页，搜索框下拉入口不能当作帖子或文章。",
   "打开新站点前等待用户授权。如果用户提到站点但没附标签页，可以用 open_page 提出 HTTPS 入口。",
   "用 open_page 的 link 参数打开可见搜索结果，再观察原文，用 collect_source 采集独立页面。不要把搜索结果目录当作单篇原文。不要自行编造网址或来源。",
   "登录、验证码、页面受限或需要正式提交时调用 pause_task。搜索任务遇到 searchRequiresLogin 且没有搜索控件时，请说明搜索需要用户登录。访问其他站点时等用户授权。",
@@ -41,6 +41,7 @@ function context(run: RunState, guides: Awaited<ReturnType<typeof readSiteGuides
     证据: run.evidence.map(({ id, title, url, excerpt }) => ({ id, title, url, excerpt: excerpt.slice(0, 320) })),
     初始当前标签页: run.activePageId,
     当前页: run.pages.find(page => page.tabId === run.focusTabId)?.id ?? run.activePageId,
+    待核对的搜索页: run.searchAttempt?.pageId,
   })
 }
 
@@ -98,6 +99,13 @@ export async function runAgent(
 ): Promise<RunState> {
   if (initial.pageAction) return runPageAction(initial, initial.pageAction, profile, apiKey, client, signal, onText)
   signal.throwIfAborted()
+  if (initial.pendingNavigation) {
+    const result = await client.request<ToolResult>({
+      kind: "tool", id: initial.id, name: "open_page", raw: JSON.stringify({ url: initial.pendingNavigation.url }),
+    })
+    initial = result.run
+    if (initial.status !== "running") return initial
+  }
   const guides = await readSiteGuides()
   const history: ChatMessage[] = previous.slice(-4).flatMap(turn => {
     const reply = turn.answer || turn.report?.markdown || turn.reason

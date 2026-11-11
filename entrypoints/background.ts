@@ -185,6 +185,16 @@ async function pause(id: string, owner: string, reason: string): Promise<RunStat
   return announce(run)
 }
 
+function waitForUser(run: RunState, error: NeedsUser): void {
+  if (run.status !== "running") return
+  run.status = "needs_user"
+  run.owner = undefined
+  run.reason = error.message
+  run.requestedOrigin = error.origin
+  run.focusTabId = error.tabId ?? run.focusTabId
+  run.report = evidenceDraft(run.id, run.evidence, error.message)
+}
+
 async function step(id: string, owner: string, name: string, raw: string): Promise<ToolResult> {
   let tool
   try {
@@ -213,6 +223,7 @@ async function step(id: string, owner: string, name: string, raw: string): Promi
       result.update?.(current)
       current.inFlight = undefined
       addEvent(current, label, result.detail, result.dispatched ? "dispatched" : undefined, actionId)
+      if (result.needsUser) waitForUser(current, result.needsUser)
     })
     return { run: announce(run), output: result.output }
   } catch (error) {
@@ -222,14 +233,12 @@ async function step(id: string, owner: string, name: string, raw: string): Promi
       if (current.inFlight?.id !== actionId) return
       current.inFlight = undefined
       addEvent(current, label, message, outcome, actionId)
-      if (error instanceof NeedsUser && current.status === "running") {
-        current.status = "needs_user"
-        current.owner = undefined
-        current.reason = message
-        current.requestedOrigin = error.origin
-        current.focusTabId = error.tabId ?? current.focusTabId
-        current.report = evidenceDraft(current.id, current.evidence, message)
+      if (tool.name === "open_page" && current.pendingNavigation && current.pendingNavigation.url === tool.args.url &&
+          !(error instanceof NeedsUser && error.origin)) {
+        // 打开动作状态不明时，继续任务不应自动重复开页。
+        current.pendingNavigation = undefined
       }
+      if (error instanceof NeedsUser) waitForUser(current, error)
     })
     return { run: announce(run), output: { error: message, outcome } }
   }

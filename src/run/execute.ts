@@ -9,6 +9,7 @@ interface Step {
   output: unknown
   detail?: string
   dispatched?: boolean
+  needsUser?: NeedsUser
   update?: (run: RunState) => void
 }
 
@@ -25,6 +26,14 @@ export const toolLabels: Record<ToolName, string> = {
 function requireField<T>(response: { ok: boolean } & Partial<Record<string, unknown>>, field: string): T {
   if (response.ok && field in response) return response[field] as T
   throw new Error(typeof response.reason === "string" ? response.reason : "页面没有返回预期结果")
+}
+
+type OpenedPage = Awaited<ReturnType<typeof newTaskPage>>
+
+function registerPage(run: RunState, opened: OpenedPage): void {
+  run.pages.push(opened.page)
+  run.groupId = opened.groupId
+  run.focusTabId = opened.page.tabId
 }
 
 export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> {
@@ -61,9 +70,13 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
         detail: opened.page.origin,
         dispatched: true,
         update(current) {
-          current.pages.push(opened.page)
-          current.groupId = opened.groupId
-          current.focusTabId = opened.page.tabId
+          registerPage(current, opened)
+          const pending = current.pendingNavigation
+          if (pending?.url === target) {
+            const search = current.searchAttempt
+            if (search?.pageId === pending.fromPageId) search.pageId = opened.page.id
+            current.pendingNavigation = undefined
+          }
         },
       }
     }
@@ -100,14 +113,35 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
       if (page.role !== "task") throw new Error("参考页用于阅读，请先打开任务页再操作")
       const response = await sendToPage(run, page, { kind: "interact", ...tool.args })
       requireField(response, "dispatched")
+      const navigation = "navigation" in response ? response.navigation : undefined
+      let opened: OpenedPage | undefined
+      let needsUser: NeedsUser | undefined
+      let navigationError: string | undefined
+      if (navigation) {
+        try {
+          opened = await newTaskPage(run, navigation)
+        } catch (error) {
+          if (error instanceof NeedsUser && error.origin) needsUser = error
+          else navigationError = error instanceof Error ? error.message : "未能确认后台结果页"
+        }
+      }
+      const next = opened?.page ?? page
+      const detail = tool.args.action === "search" ? "搜索「" + tool.args.value + "」" : page.title
       return {
-        output: { outcome: "dispatched", pageId: page.id, message: "已派发，请读取最新页面判断结果" },
-        detail: tool.args.action === "search" ? "搜索「" + tool.args.value + "」" : page.title,
+        output: {
+          outcome: "dispatched", pageId: next.id, url: opened?.url,
+          message: needsUser?.message ?? navigationError ??
+            (opened ? "已打开后台结果页，请读取此 pageId 判断结果" : "已派发，请读取此 pageId 判断结果"),
+        },
+        detail: detail + (opened ? " · 已打开后台结果页" : needsUser ? " · 等待授权" : navigationError ? " · " + navigationError : ""),
         dispatched: true,
+        needsUser,
         update(current) {
-          current.focusTabId = page.tabId
+          if (opened) registerPage(current, opened)
+          else current.focusTabId = page.tabId
+          if (navigation && needsUser) current.pendingNavigation = { url: navigation, fromPageId: page.id }
           if (tool.args.action === "search" && tool.args.value && page.observation) {
-            current.searchAttempt = { pageId: page.id, query: tool.args.value, before: page.observation }
+            current.searchAttempt = { pageId: next.id, query: tool.args.value, before: page.observation }
           }
         },
       }

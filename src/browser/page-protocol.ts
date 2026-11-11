@@ -23,6 +23,7 @@ export type PageCommand = {
     elementId?: string
     value?: string
     direction?: "up" | "down"
+    trigger?: string
   }
 )
 
@@ -31,4 +32,5 @@ export type PageReply =
   | { ok: true; observation: Observation }
   | { ok: true; url: string }
   | { ok: true; source: Pick<Observation, "title" | "url" | "text" | "blocked"> }
-  | { ok: true; dispatched: true }
+  | { ok: true; prepared: true }
+  | { ok: true; dispatched: true; navigation?: string }

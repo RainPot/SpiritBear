@@ -123,6 +123,17 @@ function observe(): { observation: Observation; snapshot: Snapshot } {
   return { observation, snapshot }
 }
 
+function submitInTaskTab(element: HTMLElement, attribute: "target" | "formtarget", submit: () => void): void {
+  const previous = element.getAttribute(attribute)
+  element.setAttribute(attribute, "_self")
+  try {
+    submit()
+  } finally {
+    if (previous === null) element.removeAttribute(attribute)
+    else element.setAttribute(attribute, previous)
+  }
+}
+
 function runAction(command: Extract<PageCommand, { kind: "interact" }>, target?: Target): PageReply {
   if (command.action === "scroll") {
     window.scrollBy({ top: (command.direction === "up" ? -1 : 1) * Math.max(window.innerHeight * 0.75, 320), behavior: "instant" })
@@ -135,7 +146,9 @@ function runAction(command: Extract<PageCommand, { kind: "interact" }>, target?:
 
   const node = target.element
   if (command.action === "click") {
-    node.click()
+    if ((node instanceof HTMLButtonElement || node instanceof HTMLInputElement) && node.type === "submit" && node.form) {
+      submitInTaskTab(node, "formtarget", () => node.click())
+    } else node.click()
     return { ok: true, dispatched: true }
   }
   if (command.action === "choose" && node instanceof HTMLSelectElement) {
@@ -148,14 +161,18 @@ function runAction(command: Extract<PageCommand, { kind: "interact" }>, target?:
   if (command.action === "search" && (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) && command.value?.trim()) {
     const prototype = node instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype
     const setValue = Object.getOwnPropertyDescriptor(prototype, "value")?.set
-    node.focus()
     setValue?.call(node, command.value)
     node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: command.value }))
     node.dispatchEvent(new Event("change", { bubbles: true }))
     const form = node.form
-    if (form?.method === "get" && pageOrigin(form.action) === location.origin) form.requestSubmit()
-    else for (const type of ["keydown", "keyup"]) {
-      node.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", bubbles: true, cancelable: true }))
+    if (form?.method === "get" && pageOrigin(form.action) === location.origin) {
+      submitInTaskTab(form, "target", () => form.requestSubmit())
+    } else {
+      const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }
+      if (node.dispatchEvent(new KeyboardEvent("keydown", enter))) {
+        node.dispatchEvent(new KeyboardEvent("keypress", { ...enter, charCode: 13 }))
+      }
+      node.dispatchEvent(new KeyboardEvent("keyup", enter))
     }
     return { ok: true, dispatched: true }
   }
@@ -208,6 +225,18 @@ export default defineUnlistedScript(() => {
       reply({ ok: false, reason: "页面需要用户处理登录或验证" })
       return
     }
-    reply(runAction(command, target))
+    if (!command.trigger) {
+      reply(runAction(command, target))
+      return
+    }
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 8000)
+    // 网页主世界同步触发这次操作，控件仍由隔离世界校验和执行。
+    document.addEventListener(command.trigger, event => {
+      window.clearTimeout(timeout)
+      if (latest?.id !== command.observationId || latest.url !== location.href) return
+      if (runAction(command, target).ok) event.preventDefault()
+    }, { once: true, signal: controller.signal })
+    reply({ ok: true, prepared: true })
   })
 })
