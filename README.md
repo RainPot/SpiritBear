@@ -1,10 +1,10 @@
 # TabErrand
 
-用自己的模型，把 Chrome 里的搜索和阅读交给 Agent，拿回一份带来源的 Markdown。
+在 Chrome 侧栏里和自己的模型对话。用 `@` 引用标签页，让 Agent 搜索、整理来源并保存 Markdown。
 
-> TabErrand MVP v0.1.0 可在本地加载。下图是首版交互概念图，使用示例数据。
+> TabErrand v0.2.0 可在本地加载。下图是对话侧栏的运行画面，使用受控网页的示例数据。
 
-![TabErrand 交互概念图。左侧是独立任务标签组，右侧显示 @标签页、采集进度和 Markdown 保存结果。](docs/assets/task-preview.png)
+![TabErrand 对话侧栏。@ 标签页随消息发送，助手回复带来源并附 Markdown 文件。](docs/assets/task-preview.png)
 
 [本地加载](#本地加载) · [任务示例](#一条任务从哪里开始) · [技术方案](docs/technical-design.md)
 
@@ -43,6 +43,12 @@ flowchart LR
 2. [项目复盘示例](https://example.org/interviews/project-review)
 ```
 
+## 连续对话
+
+底部输入框可以直接提问，也可以用 `@` 附上标签页。按 Enter 发送，Shift+Enter 换行。浏览动作和接管入口出现在对应的助手消息里。接着追问时，对话会带上近期回复和已经采集的来源。
+
+点击「新对话」开始独立对话，从「历史」可以回到已有记录。报告正文和来源直接显示在消息里，文件卡片提供「另存为」和「在文件夹中显示」。
+
 ## 首版能力
 
 | 能力 | 你可以做什么 |
@@ -66,8 +72,8 @@ npm run build
 
 1. 在 Chrome 打开 `chrome://extensions`，打开「开发者模式」，点「加载已解压的扩展程序」，选择构建输出 `.output/chrome-mv3`。
 2. 点击工具栏的 TabErrand 图标打开侧栏。在「模型设置」中选 OpenAI 或 DeepSeek，填写自己的 API Key，再点「测试连接」或「保存并授权」。默认模型分别是 `gpt-4.1-mini` 和 `deepseek-flash`，可修改模型 ID。
-3. 在同一个 Chrome 窗口打开目标网页。回到侧栏输入 `@` 选中标签页，写明要搜什么、读几条资料和怎么整理，点击「开始任务」并授予任务站点权限。
-4. 在任务进度中查看采集结果。报告完成后，Chrome 会尝试保存到默认下载位置下的 `TabErrand/`。可以在报告卡片预览、另存为或打开文件夹。
+3. 在同一个 Chrome 窗口打开目标网页。回到侧栏输入 `@` 选中标签页，写明要搜什么、读几条资料和怎么整理，点击「发送」并授予任务站点权限。
+4. 在对应的助手消息中查看采集结果。报告完成后，Chrome 会尝试保存到默认下载位置下的 `TabErrand/`。可以在报告卡片预览、另存为或打开文件夹。
 
 API Key 仅保存在当前 Chrome 会话。任务需要登录或验证码时，打开任务页手动处理，再回侧栏点击「继续任务」。
 
@@ -77,6 +83,6 @@ API Key 仅保存在当前 Chrome 会话。任务需要登录或验证码时，�
 
 ## 参考项目
 
-- **Kaze** 的侧栏、任务标签组和接管体验启发了 TabErrand 的任务交互。[Kaze 官网](https://kaze.build/)
+- **Kaze** 的侧栏、任务标签组和接管体验启发了浏览交互。**DeepSeek** 的聊天和历史记录启发了对话布局。[Kaze 官网](https://kaze.build/) · [DeepSeek](https://www.deepseek.com/en/download/)
 - **Browser Use** 的 README 用任务演示展示 Agent 实际做了什么，再给出入口。[Browser Use README](https://github.com/browser-use/browser-use#readme)
 - **Nanobrowser** 展示了 Chrome 扩展与自备模型的组合，README 给出了模型配置和首条任务的路径。[Nanobrowser README](https://github.com/nanobrowser/nanobrowser#readme)

@@ -82,7 +82,7 @@ export function parseToolCall(name: string, raw: string): ToolCall {
 const chineseDigits = "零一二三四五六七八九"
 
 export function requestedSourceCount(prompt: string): number | undefined {
-  const found = /(?:^|[^\d])(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*(?:条|篇|份)(?:\s*(?:不同的?|相关的?|独立的?))?\s*(?:笔记|来源|资料|材料|文章|记录|结果|文档)?/.exec(prompt)
+  const found = /(?:^|[^\d])(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*(?:条|篇|份|个)\s*(?:(?:不同|相关|独立|公开|正式|官方|有效|真实)(?:的)?\s*){0,3}(?:笔记|来源|资料|材料|文章|记录|结果|文档|原文|链接|帖子|网页|[\p{L}]{0,12}面经)/u.exec(prompt)
   if (!found?.[1]) return
   const text = found[1].replaceAll("两", "二")
   let count = Number(text)

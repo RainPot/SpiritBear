@@ -1,6 +1,7 @@
 import type { ToolCall, ToolName } from "../agent/contracts"
 import { buildReport } from "../agent/report"
 import { getPage, NeedsUser, newTaskPage, pageUrl, sendToPage } from "../browser/browser"
+import { requiresSearchBox, searchWasObserved } from "../browser/search-proof"
 import type { RunState } from "./state"
 
 interface Step {
@@ -80,6 +81,13 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
         update(current) {
           const target = getPage(current, page.id)
           target.title = observation.title
+          const snapshot = { url: observation.url, text: observation.text.slice(0, 1200) }
+          target.observation = snapshot
+          const search = current.searchAttempt
+          if (search?.pageId === page.id && searchWasObserved(search.query, search.before, snapshot)) {
+            current.searchResult = { url: observation.url, title: observation.title }
+            current.searchAttempt = undefined
+          }
           current.focusTabId = target.tabId
         },
       }
@@ -91,8 +99,13 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
       requireField(response, "dispatched")
       return {
         output: { outcome: "dispatched", pageId: page.id, message: "已派发，请读取最新页面判断结果" },
-        detail: page.title,
+        detail: tool.args.action === "search" ? "搜索「" + tool.args.value + "」" : page.title,
         dispatched: true,
+        update(current) {
+          if (tool.args.action === "search" && tool.args.value && page.observation) {
+            current.searchAttempt = { pageId: page.id, query: tool.args.value, before: page.observation }
+          }
+        },
       }
     }
     case "collect_source": {
@@ -119,6 +132,10 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
       }
     }
     case "finish_report": {
+      if (requiresSearchBox(run.task) && !run.searchResult) {
+        const reason = "请使用页面搜索框查询，并重新观察搜索结果后再提交报告"
+        return { output: { complete: false, error: reason }, detail: reason }
+      }
       const report = buildReport(run.id, run.criteria, run.evidence, tool.args)
       return {
         output: { complete: report.complete, gaps: report.gaps, sources: report.sources.length },

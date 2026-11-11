@@ -39,6 +39,7 @@ export function Settings({ provider, onProvider }: { provider: ProviderId; onPro
       const origin = completionEndpoint(profile.baseUrl).origin
       const authorized = chrome.permissions.request({ origins: [hostPattern(origin)] })
       setBusy(true)
+      setStatus("等待 Chrome 授权…")
       void (async () => {
         try {
           await writeProvider(profile, key.trim(), authorized)
@@ -83,7 +84,7 @@ export function Settings({ provider, onProvider }: { provider: ProviderId; onPro
         autoComplete="off" spellCheck={false} disabled={busy}
         placeholder={stored ? "已保存到当前浏览器会话" : "粘贴 API Key"} />
     </label>
-    <p className="hint">Chrome 重启后需要重新输入 Key。测试连接会调用一次模型工具。</p>
+    <p className="hint">Chrome 重启后需要重新输入 Key。对话和任务所需的网页片段会发送给所选模型。测试连接会调用一次模型工具。</p>
     <div className="actions">
       <button className="primary" disabled={busy || (!key.trim() && !stored)} onClick={() => apply(false)}>保存并授权</button>
       <button className="secondary" disabled={busy || (!key.trim() && !stored)} onClick={() => apply(true)}>测试连接</button>

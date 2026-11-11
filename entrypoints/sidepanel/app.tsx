@@ -5,7 +5,7 @@ import { hostPattern, pageOrigin } from "../../src/browser/urls"
 import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
 import { runAgent } from "../../src/run/loop"
-import type { PageRef, RunState } from "../../src/run/state"
+import { conversationId, type PageRef, type RunState } from "../../src/run/state"
 import { Compose } from "./compose"
 import { runLabel, RunView } from "./run-view"
 import { Settings } from "./settings"
@@ -15,38 +15,54 @@ function message(error: unknown): string {
 }
 
 export function App() {
-  const [section, setSection] = useState<"task" | "settings">("task")
+  const [section, setSection] = useState<"chat" | "settings">("chat")
   const [provider, setProvider] = useState<ProviderId>("openai")
   const [runs, setRuns] = useState<RunState[]>([])
-  const [selectedId, setSelectedId] = useState<string>()
+  const [threadId, setThreadId] = useState<string>()
+  const [showHistory, setShowHistory] = useState(false)
+  const [draftVersion, setDraftVersion] = useState(0)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const lock = useRef(false)
   const clientRef = useRef<PanelClient | null>(null)
   const runner = useRef<{ id: string; controller: AbortController } | null>(null)
-  const run = runs.find(item => item.id === selectedId)
+  const transcript = useRef<HTMLDivElement>(null)
+  const followTail = useRef(true)
+  const turns = runs.filter(item => conversationId(item) === threadId).reverse()
+  const last = turns.at(-1)
   const running = runs.some(item => item.status === "running")
+  const threads = new Map<string, RunState>()
+  for (const item of runs) {
+    const id = conversationId(item)
+    if (!threads.has(id)) threads.set(id, item)
+  }
 
   function updateRun(updated: RunState) {
     setRuns(current => {
       const existing = current.find(item => item.id === updated.id)
       if (existing && existing.updatedAt > updated.updatedAt) return current
-      return [updated, ...current.filter(item => item.id !== updated.id)].sort((a, b) => b.createdAt - a.createdAt).slice(0, 20)
+      return [updated, ...current.filter(item => item.id !== updated.id)]
+        .sort((a, b) => b.createdAt - a.createdAt).slice(0, 20)
     })
   }
 
   useEffect(() => {
     let active = true
     const client = new PanelClient(updateRun, () => {
-      runner.current?.controller.abort()
-      setError("后台连接已断开。继续前会重新观察当前页。")
-      setRuns(current => current.map(item => item.status === "running" ? { ...item, status: "paused" } : item))
+      const current = runner.current
+      // 空闲时 Chrome 会回收 Worker，下一次请求会自动建立连接。
+      if (!current || current.controller.signal.aborted) return
+      current.controller.abort()
+      setError("后台连接中断，继续前会重新观察当前页。")
+      setRuns(items => items.map(item => item.id === current.id && item.status === "running"
+        ? { ...item, status: "paused" } : item))
     })
     clientRef.current = client
     void client.request<RunState[]>({ kind: "history" }).then(history => {
       if (!active) return
       setRuns(history)
-      setSelectedId((history.find(item => item.status === "running") ?? history[0])?.id)
+      const newest = history.find(item => item.status === "running") ?? history[0]
+      if (newest) setThreadId(conversationId(newest))
     }, error => { if (active) setError(message(error)) })
     void chrome.storage.local.get("selectedProvider").then(({ selectedProvider }) => {
       if (active && (selectedProvider === "openai" || selectedProvider === "deepseek")) setProvider(selectedProvider)
@@ -58,6 +74,11 @@ export function App() {
       clientRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    const element = transcript.current
+    if (element && followTail.current) element.scrollTop = element.scrollHeight
+  }, [threadId, section, last?.updatedAt, turns.length])
 
   function withAction(action: (client: PanelClient) => Promise<unknown>) {
     const client = clientRef.current
@@ -71,7 +92,7 @@ export function App() {
     })
   }
 
-  function launch(client: PanelClient, initial: RunState, configuration: { profile: ProviderProfile; apiKey: string }) {
+  function launch(client: PanelClient, initial: RunState, configuration: { profile: ProviderProfile; apiKey: string }, history: RunState[]) {
     const controller = new AbortController()
     runner.current = { id: initial.id, controller }
     const heartbeat = window.setInterval(() => {
@@ -79,8 +100,10 @@ export function App() {
     }, 18_000)
     void (async () => {
       try {
-        const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal)
-        if (!controller.signal.aborted && finished.status === "complete") await saveMarkdown(client, finished.id, true)
+        const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal, history)
+        if (!controller.signal.aborted && finished.status === "complete" && finished.report?.complete) {
+          await saveMarkdown(client, finished.id, true)
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           setError(message(error))
@@ -93,7 +116,7 @@ export function App() {
     })()
   }
 
-  function begin(task: string, references: PageRef[], rawUrl: string, windowId: number) {
+  function send(task: string, references: PageRef[], rawUrl: string, windowId?: number) {
     if (lock.current || running) return
     let permission: Promise<boolean>
     const startUrl = rawUrl.trim() || undefined
@@ -104,8 +127,9 @@ export function App() {
         if (!origin) throw new Error("起始网址须为 Chrome 可访问的 HTTPS 网页")
         origins.add(origin)
       }
-      if (!origins.size) throw new Error("请选择参考标签页或指定网址")
-      permission = chrome.permissions.request({ origins: [...origins].map(hostPattern) })
+      permission = origins.size
+        ? chrome.permissions.request({ origins: [...origins].map(hostPattern) })
+        : Promise.resolve(true)
     } catch (error) {
       setError(message(error))
       return
@@ -113,14 +137,17 @@ export function App() {
     withAction(async client => {
       if (!await permission) throw new Error("Chrome 未授予任务站点权限")
       const configuration = await providerForRun(provider)
-      const currentWindowId = windowId === chrome.windows.WINDOW_ID_CURRENT ? (await chrome.windows.getCurrent()).id : windowId
+      const currentWindowId = windowId ?? (await chrome.windows.getCurrent()).id
       if (currentWindowId === undefined) throw new Error("无法确定当前浏览器窗口")
       const started = await client.request<RunState>({
-        kind: "start", input: { windowId: currentWindowId, task, provider, references, startUrl },
+        kind: "start",
+        input: { windowId: currentWindowId, task, provider, references, startUrl, previousRunId: last?.id },
       })
+      followTail.current = true
       updateRun(started)
-      setSelectedId(started.id)
-      launch(client, started, configuration)
+      setThreadId(conversationId(started))
+      setDraftVersion(version => version + 1)
+      launch(client, started, configuration, turns)
     })
   }
 
@@ -128,7 +155,7 @@ export function App() {
     const configuration = await providerForRun(selected.provider)
     const resumed = await client.request<RunState>({ kind: "resume", id: selected.id })
     updateRun(resumed)
-    launch(client, resumed, configuration)
+    launch(client, resumed, configuration, turns.filter(item => item.id !== selected.id))
   }
 
   function authorize(selected: RunState) {
@@ -142,6 +169,15 @@ export function App() {
     })
   }
 
+  function switchThread(id?: string) {
+    setThreadId(id)
+    setSection("chat")
+    setError("")
+    setShowHistory(false)
+    setDraftVersion(version => version + 1)
+    followTail.current = true
+  }
+
   function selectProvider(value: ProviderId) {
     setProvider(value)
     void chrome.storage.local.set({ selectedProvider: value })
@@ -150,44 +186,60 @@ export function App() {
   return <main className="shell">
     <header className="topbar">
       <div className="brand"><span className="mark" aria-hidden="true" /><strong>TabErrand</strong></div>
-      <nav className="navigation" aria-label="侧栏页面">
-        <button aria-current={section === "task" ? "page" : undefined} onClick={() => { setSection("task"); setError("") }}>任务</button>
-        <button aria-current={section === "settings" ? "page" : undefined} onClick={() => { setSection("settings"); setError("") }}>模型设置</button>
+      <nav className="navigation" aria-label="对话导航">
+        <button disabled={busy || running} onClick={() => switchThread()}>新对话</button>
+        <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>历史</button>
+        <button aria-current={section === "settings" ? "page" : undefined} onClick={() => {
+          setSection(section === "settings" ? "chat" : "settings")
+          setShowHistory(false)
+          setError("")
+        }}>{section === "settings" ? "返回对话" : "模型设置"}</button>
       </nav>
     </header>
-    {error && <p className="notice warning" role="alert">{error}</p>}
-    {section === "settings" ? <Settings provider={provider} onProvider={selectProvider} /> : <>
-      <div className="model-strip">
-        <span>当前模型</span>
-        <button className="plain small" onClick={() => setSection("settings")}>{providerLabels[run?.provider ?? provider]} ›</button>
+    {showHistory && <section className="history" aria-label="本地对话记录">
+      {threads.size ? <ul>
+        {[...threads].map(([id, item]) => <li key={id}>
+          <button className="history-item" aria-current={id === threadId ? "page" : undefined}
+            onClick={() => switchThread(id)}><span>{item.task}</span><small>{runLabel(item)}</small></button>
+        </li>)}
+      </ul> : <p className="empty">这里会显示最近的对话。</p>}
+      {!!threads.size && <button className="plain small" disabled={running || busy}
+        onClick={() => withAction(async client => {
+          await client.request({ kind: "clear" })
+          setRuns([])
+          switchThread()
+        })}>清除本地记录</button>}
+    </section>}
+    {error && <p className="notice warning top-notice" role="alert">{error}</p>}
+    {section === "settings" ? <div className="settings-body"><Settings provider={provider} onProvider={selectProvider} /></div> : <>
+      <div className="transcript" ref={transcript} onScroll={event => {
+        const element = event.currentTarget
+        followTail.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70
+      }}>
+        {!turns.length && <div className="welcome">
+          <h1>你想在浏览器里做什么？</h1>
+          <p>输入消息开始对话。用 <strong>@</strong> 引用标签页，让助手查网页、整理来源或保存报告。</p>
+        </div>}
+        {turns.map(run => <section className="turn" key={run.id} aria-label="对话轮次">
+          <div className="user-message">
+            {!!run.references?.length && <ul className="sent-references" aria-label="引用的标签页">
+              {run.references.map((title, index) => <li key={index}>@ {title}</li>)}
+            </ul>}
+            <p>{run.task}</p>
+          </div>
+          <RunView run={run} current={run.id === last?.id} busy={busy}
+            pause={() => {
+              if (runner.current?.id === run.id) runner.current.controller.abort()
+              withAction(client => client.request({ kind: "pause", id: run.id, reason: "已暂停，可以继续或打开任务页接管" }))
+            }}
+            resume={() => withAction(client => continueRun(client, run))}
+            authorize={() => authorize(run)}
+            focus={() => withAction(client => client.request({ kind: "focus", id: run.id }))}
+            save={() => withAction(client => saveMarkdown(client, run.id, false))}
+            cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))} />
+        </section>)}
       </div>
-      {run ? <RunView run={run} busy={busy}
-        pause={() => {
-          if (runner.current?.id === run.id) runner.current.controller.abort()
-          withAction(client => client.request({ kind: "pause", id: run.id, reason: "已暂停，可以继续或打开任务页接管" }))
-        }}
-        resume={() => withAction(client => continueRun(client, run))}
-        authorize={() => authorize(run)}
-        focus={() => withAction(client => client.request({ kind: "focus", id: run.id }))}
-        save={() => withAction(client => saveMarkdown(client, run.id, false))}
-        cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))}
-        create={() => { setSelectedId(undefined); setError("") }} /> :
-        <Compose disabled={busy || running} onStart={begin} />}
-      {runs.length > 0 && <details className="history">
-        <summary>本地任务记录</summary>
-        <ul>
-          {runs.map(item => <li key={item.id}><button className="history-item" type="button"
-            onClick={() => { setSelectedId(item.id); setError("") }}>
-            <span>{item.query || item.task}</span><small>{runLabel(item)}</small>
-          </button></li>)}
-        </ul>
-        <button className="plain small" disabled={running || busy}
-          onClick={() => withAction(async client => {
-            await client.request({ kind: "clear" })
-            setRuns([])
-            setSelectedId(undefined)
-          })}>清除本地记录</button>
-      </details>}
+      <Compose key={draftVersion} disabled={busy || running} providerLabel={providerLabels[provider]} onSend={send} />
     </>}
   </main>
 }

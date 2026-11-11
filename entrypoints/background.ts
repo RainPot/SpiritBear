@@ -1,10 +1,11 @@
 import { parseToolCall, requestedSourceCount } from "../src/agent/contracts"
 import { evidenceDraft } from "../src/agent/report"
 import { getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
+import { requiresSearchBox } from "../src/browser/search-proof"
 import { cleanPageUrl, hostPattern, pageOrigin } from "../src/browser/urls"
 import { executeStep, toolLabels } from "../src/run/execute"
 import { changeRun, clearRuns, createRun, getRun, listRuns } from "../src/run/store"
-import { addEvent, type PanelCommand, type PanelReply, type PanelRequest, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
+import { addEvent, conversationId, type PanelCommand, type PanelReply, type PanelRequest, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
 
 const workerEpoch = crypto.randomUUID()
 const owners = new Map<string, chrome.runtime.Port>()
@@ -90,11 +91,20 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
   if (input.references.length > 12) throw new Error("一条任务最多引用 12 个标签页")
   const window = await chrome.windows.get(input.windowId)
   if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用 TabErrand")
+  const session = await sessionId()
+  const previous = input.previousRunId ? await getRun(input.previousRunId) : undefined
+  const explicit = input.references.length > 0
+  const retained = previous?.session === session && previous.windowId === input.windowId
+    ? previous.pages.filter(page => page.role === "reference") : []
   const pages: RunPage[] = []
   const origins = new Set<string>()
-  for (const ref of input.references) {
-    const tab = await getTab(ref.tabId, input.windowId)
-    if (!ref.origin || pageOrigin(tab.url ?? "") !== ref.origin) throw new Error("参考页已跳转，请重新选择标签页")
+  for (const ref of explicit ? input.references : retained) {
+    const tab = await getTab(ref.tabId, input.windowId).catch(() => undefined)
+    if (!tab || !ref.origin || pageOrigin(tab.url ?? "") !== ref.origin) {
+      if (explicit) throw new Error("参考页已关闭或跳转，请重新选择标签页")
+      continue
+    }
+    if (!explicit && !await chrome.permissions.contains({ origins: [hostPattern(ref.origin)] })) continue
     if (pages.some(page => page.tabId === ref.tabId)) continue
     pages.push({ ...ref, title: (tab.title || ref.title).slice(0, 160), role: "reference", id: crypto.randomUUID() })
     origins.add(ref.origin)
@@ -106,19 +116,23 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     startUrl = cleanPageUrl(input.startUrl)
     origins.add(origin)
   }
-  if (!origins.size) throw new Error("请用 @ 选择参考标签页，或填写 HTTPS 起始网址")
-  if (!await chrome.permissions.contains({ origins: [...origins].map(hostPattern) })) throw new Error("需要授权任务站点")
+  if (origins.size && !await chrome.permissions.contains({ origins: [...origins].map(hostPattern) })) throw new Error("需要授权任务站点")
   if (!owners.has(owner)) throw new Error("侧栏已关闭")
   const fixedCount = requestedSourceCount(task)
   const now = Date.now()
+  const id = crypto.randomUUID()
+  const inherited = (previous?.evidence ?? []).slice(-12)
+    .map((source, index) => ({ ...source, id: "S" + (index + 1) }))
   const run: RunState = {
-    id: crypto.randomUUID(), session: await sessionId(), owner, windowId: input.windowId,
+    id, session, owner, windowId: input.windowId,
+    conversationId: previous ? conversationId(previous) : id,
+    references: explicit ? pages.map(page => page.title) : undefined,
     task, provider: input.provider, startUrl, pages, allowedOrigins: [...origins],
     criteria: { sourceCount: fixedCount ?? Math.max(pages.length, 1), topics: [] },
-    fixedCount, evidence: [], events: [], tokens: 0, steps: 0,
+    fixedCount, evidence: inherited, events: [], tokens: 0, steps: 0,
     createdAt: now, updatedAt: now, status: "running",
   }
-  addEvent(run, "开始任务", pages.length ? "引用 " + pages.length + " 个标签页" : new URL(startUrl!).hostname)
+  addEvent(run, "收到消息", pages.length ? "引用 " + pages.length + " 个标签页" : startUrl ? new URL(startUrl).hostname : undefined)
   return announce(await createRun(run))
 }
 
@@ -218,6 +232,19 @@ async function commandFor(owner: string, command: PanelCommand): Promise<unknown
         own(run, owner)
         if (Number.isFinite(command.tokens)) run.tokens += Math.max(0, command.tokens)
         addEvent(run, "模型返回", Math.round(command.durationMs / 100) / 10 + " 秒")
+      }))
+    case "answer":
+      return announce(await changeRun(command.id, run => {
+        own(run, owner)
+        if (requiresSearchBox(run.task) && !run.searchResult && (run.pages.length || run.startUrl)) {
+          run.status = "partial"
+          run.reason = "还没有观察到网页搜索结果"
+          run.report = evidenceDraft(run.id, run.evidence, run.reason)
+        } else {
+          run.status = "complete"
+          run.answer = command.text.trim().slice(0, 32_000)
+        }
+        run.owner = undefined
       }))
     case "limit":
       return announce(await changeRun(command.id, run => {

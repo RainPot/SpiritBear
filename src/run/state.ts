@@ -1,3 +1,4 @@
+import type { SearchSnapshot } from "../browser/search-proof"
 import type { ProviderId } from "../agent/provider"
 import type { Artifact, Criteria, Evidence } from "../agent/report"
 
@@ -10,6 +11,7 @@ export interface PageRef {
 export interface RunPage extends PageRef {
   id: string
   role: "reference" | "task"
+  observation?: SearchSnapshot
 }
 
 export interface RunEvent {
@@ -31,6 +33,8 @@ export interface DownloadState {
 export interface RunState {
   id: string
   session: string
+  conversationId?: string
+  references?: string[]
   owner?: string
   windowId: number
   task: string
@@ -39,6 +43,8 @@ export interface RunState {
   criteria: Criteria
   fixedCount?: number
   query?: string
+  searchAttempt?: { pageId: string; query: string; before: SearchSnapshot }
+  searchResult?: { url: string; title: string }
   pages: RunPage[]
   allowedOrigins: string[]
   groupId?: number
@@ -54,6 +60,7 @@ export interface RunState {
   reason?: string
   inFlight?: { id: string; label: string; at: number; epoch: string }
   report?: Artifact
+  answer?: string
   download?: DownloadState
 }
 
@@ -62,6 +69,7 @@ export interface StartInput {
   task: string
   provider: ProviderId
   references: PageRef[]
+  previousRunId?: string
   startUrl?: string
 }
 
@@ -74,6 +82,7 @@ export type PanelCommand =
   | { kind: "tool"; id: string; name: string; raw: string }
   | { kind: "model"; id: string; tokens: number; durationMs: number }
   | { kind: "limit"; id: string; reason: string }
+  | { kind: "answer"; id: string; text: string }
   | { kind: "export_start"; id: string; automatic: boolean }
   | { kind: "export_record"; id: string; attempt: string; downloadId?: number; uncertain?: boolean }
   | { kind: "focus"; id: string }
@@ -95,6 +104,10 @@ export type PanelReply =
   | { requestId: number; value: unknown }
   | { requestId: number; error: string }
   | { event: "updated"; run: RunState }
+
+export function conversationId(run: RunState): string {
+  return run.conversationId ?? run.id
+}
 
 export function addEvent(run: RunState, label: string, detail?: string, outcome?: RunEvent["outcome"], id: string = crypto.randomUUID()): void {
   run.events = [...run.events.slice(-79), { id, at: Date.now(), label, detail, outcome }]
