@@ -109,6 +109,7 @@ export async function newTaskPage(run: RunState, url: string): Promise<{ page: R
       await chrome.tabGroups.update(groupId, { title: "TabErrand · " + run.task.slice(0, 15), color: "blue" }).catch(() => undefined)
     }
   }
-  const page: RunPage = { id: crypto.randomUUID(), tabId, origin, title: new URL(url).hostname, role: "task" }
-  return { page, groupId, url: cleanPageUrl(url) }
+  const cleaned = cleanPageUrl(url)
+  const page: RunPage = { id: crypto.randomUUID(), tabId, origin, title: new URL(url).hostname, role: "task", url: cleaned }
+  return { page, groupId, url: cleaned }
 }

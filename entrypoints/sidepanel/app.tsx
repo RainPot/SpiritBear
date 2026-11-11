@@ -5,10 +5,11 @@ import { hostPattern, pageOrigin } from "../../src/browser/urls"
 import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
 import { runAgent } from "../../src/run/loop"
-import { conversationId, type PageRef, type RunState } from "../../src/run/state"
+import { conversationId, type PageAction, type PageRef, type RunHistory, type RunState } from "../../src/run/state"
 import { Compose } from "./compose"
 import { runLabel, RunView } from "./run-view"
 import { Settings } from "./settings"
+import { SiteGuides } from "./site-guides"
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败，请重试"
@@ -18,6 +19,7 @@ export function App() {
   const [section, setSection] = useState<"chat" | "settings">("chat")
   const [provider, setProvider] = useState<ProviderId>("openai")
   const [runs, setRuns] = useState<RunState[]>([])
+  const [session, setSession] = useState<string>()
   const [threadId, setThreadId] = useState<string>()
   const [showHistory, setShowHistory] = useState(false)
   const [draftVersion, setDraftVersion] = useState(0)
@@ -25,7 +27,7 @@ export function App() {
   const [busy, setBusy] = useState(false)
   const lock = useRef(false)
   const clientRef = useRef<PanelClient | null>(null)
-  const runner = useRef<{ id: string; controller: AbortController } | null>(null)
+  const runner = useRef<{ id: string; controller: AbortController; done: Promise<void> } | null>(null)
   const transcript = useRef<HTMLDivElement>(null)
   const followTail = useRef(true)
   const turns = runs.filter(item => conversationId(item) === threadId).reverse()
@@ -58,8 +60,9 @@ export function App() {
         ? { ...item, status: "paused" } : item))
     })
     clientRef.current = client
-    void client.request<RunState[]>({ kind: "history" }).then(history => {
+    void client.request<RunHistory>({ kind: "history" }).then(({ runs: history, session }) => {
       if (!active) return
+      setSession(session)
       setRuns(history)
       const newest = history.find(item => item.status === "running") ?? history[0]
       if (newest) setThreadId(conversationId(newest))
@@ -94,11 +97,10 @@ export function App() {
 
   function launch(client: PanelClient, initial: RunState, configuration: { profile: ProviderProfile; apiKey: string }, history: RunState[]) {
     const controller = new AbortController()
-    runner.current = { id: initial.id, controller }
     const heartbeat = window.setInterval(() => {
       void client.request({ kind: "ping" }).catch(() => undefined)
     }, 18_000)
-    void (async () => {
+    const done = (async () => {
       try {
         const finished = await runAgent(initial, configuration.profile, configuration.apiKey, client, controller.signal, history)
         if (!controller.signal.aborted && finished.status === "complete" && finished.report?.complete) {
@@ -114,9 +116,10 @@ export function App() {
         if (runner.current?.controller === controller) runner.current = null
       }
     })()
+    runner.current = { id: initial.id, controller, done }
   }
 
-  function send(task: string, references: PageRef[], rawUrl: string, windowId?: number) {
+  function send(task: string, references: PageRef[], rawUrl: string, windowId?: number, pageAction?: PageAction) {
     if (lock.current || running) return
     let permission: Promise<boolean>
     const startUrl = rawUrl.trim() || undefined
@@ -141,13 +144,27 @@ export function App() {
       if (currentWindowId === undefined) throw new Error("无法确定当前浏览器窗口")
       const started = await client.request<RunState>({
         kind: "start",
-        input: { windowId: currentWindowId, task, provider, references, startUrl, previousRunId: last?.id },
+        input: { windowId: currentWindowId, task, provider, references, pageAction, startUrl, previousRunId: last?.id },
       })
       followTail.current = true
       updateRun(started)
       setThreadId(conversationId(started))
       setDraftVersion(version => version + 1)
       launch(client, started, configuration, turns)
+    })
+  }
+
+  function pauseRun(selected: RunState, takeOver = false) {
+    withAction(async client => {
+      const active = runner.current?.id === selected.id ? runner.current : null
+      active?.controller.abort()
+      const reason = takeOver ? "已暂停，处理好网页后可继续" : "已暂停，可以继续任务"
+      const paused = await client.request<RunState>({ kind: "pause", id: selected.id, reason })
+      if (paused.status === "running") throw new Error("请回到启动任务的侧栏暂停")
+      if (takeOver) {
+        if (paused.inFlight) await active?.done
+        await client.request({ kind: "focus", id: selected.id })
+      }
     })
   }
 
@@ -193,7 +210,7 @@ export function App() {
           setSection(section === "settings" ? "chat" : "settings")
           setShowHistory(false)
           setError("")
-        }}>{section === "settings" ? "返回对话" : "模型设置"}</button>
+        }}>{section === "settings" ? "返回对话" : "设置"}</button>
       </nav>
     </header>
     {showHistory && <section className="history" aria-label="本地对话记录">
@@ -211,7 +228,10 @@ export function App() {
         })}>清除本地记录</button>}
     </section>}
     {error && <p className="notice warning top-notice" role="alert">{error}</p>}
-    {section === "settings" ? <div className="settings-body"><Settings provider={provider} onProvider={selectProvider} /></div> : <>
+    {section === "settings" ? <div className="settings-body">
+      <Settings provider={provider} onProvider={selectProvider} />
+      <SiteGuides />
+    </div> : <>
       <div className="transcript" ref={transcript} onScroll={event => {
         const element = event.currentTarget
         followTail.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70
@@ -227,14 +247,12 @@ export function App() {
             </ul>}
             <p>{run.task}</p>
           </div>
-          <RunView run={run} current={run.id === last?.id} busy={busy}
-            pause={() => {
-              if (runner.current?.id === run.id) runner.current.controller.abort()
-              withAction(client => client.request({ kind: "pause", id: run.id, reason: "已暂停，可以继续或打开任务页接管" }))
-            }}
+          <RunView run={run} current={run.id === last?.id} live={run.session === session} busy={busy}
+            pause={() => pauseRun(run)}
+            takeOver={() => pauseRun(run, true)}
             resume={() => withAction(client => continueRun(client, run))}
             authorize={() => authorize(run)}
-            focus={() => withAction(client => client.request({ kind: "focus", id: run.id }))}
+            focus={pageId => withAction(client => client.request({ kind: "focus", id: run.id, pageId }))}
             save={() => withAction(client => saveMarkdown(client, run.id, false))}
             cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))} />
         </section>)}

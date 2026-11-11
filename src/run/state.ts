@@ -8,9 +8,13 @@ export interface PageRef {
   origin: string
 }
 
+export const pageActionLabels = { summarize: "总结本页", translate: "翻译本页" } as const
+export type PageAction = keyof typeof pageActionLabels
+
 export interface RunPage extends PageRef {
   id: string
   role: "reference" | "task"
+  url?: string
   observation?: SearchSnapshot
 }
 
@@ -39,6 +43,7 @@ export interface RunState {
   windowId: number
   task: string
   provider: ProviderId
+  pageAction?: PageAction
   startUrl?: string
   criteria: Criteria
   fixedCount?: number
@@ -69,6 +74,7 @@ export interface StartInput {
   task: string
   provider: ProviderId
   references: PageRef[]
+  pageAction?: PageAction
   previousRunId?: string
   startUrl?: string
 }
@@ -85,10 +91,15 @@ export type PanelCommand =
   | { kind: "answer"; id: string; text: string }
   | { kind: "export_start"; id: string; automatic: boolean }
   | { kind: "export_record"; id: string; attempt: string; downloadId?: number; uncertain?: boolean }
-  | { kind: "focus"; id: string }
+  | { kind: "focus"; id: string; pageId?: string }
   | { kind: "cleanup"; id: string }
   | { kind: "clear" }
   | { kind: "ping" }
+
+export interface RunHistory {
+  session: string
+  runs: RunState[]
+}
 
 export interface ToolResult {
   run: RunState

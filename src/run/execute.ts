@@ -81,6 +81,7 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
         update(current) {
           const target = getPage(current, page.id)
           target.title = observation.title
+          target.url = observation.url
           const snapshot = { url: observation.url, text: observation.text.slice(0, 1200) }
           target.observation = snapshot
           const search = current.searchAttempt
@@ -102,6 +103,7 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
         detail: tool.args.action === "search" ? "搜索「" + tool.args.value + "」" : page.title,
         dispatched: true,
         update(current) {
+          current.focusTabId = page.tabId
           if (tool.args.action === "search" && tool.args.value && page.observation) {
             current.searchAttempt = { pageId: page.id, query: tool.args.value, before: page.observation }
           }

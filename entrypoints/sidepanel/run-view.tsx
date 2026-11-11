@@ -41,21 +41,27 @@ function Reply({ text }: { text: string }) {
 interface Props {
   run: RunState
   current: boolean
+  live: boolean
   busy: boolean
   pause: () => void
+  takeOver: () => void
   resume: () => void
   authorize: () => void
-  focus: () => void
+  focus: (pageId?: string) => void
   save: () => void
   cleanup: () => void
 }
 
-export function RunView({ run, current, busy, pause, resume, authorize, focus, save, cleanup }: Props) {
+export function RunView({ run, current, live, busy, pause, takeOver, resume, authorize, focus, save, cleanup }: Props) {
   const running = run.status === "running"
   const downloadable = run.download?.state !== "pending" && run.download?.state !== "in_progress"
   const activity = run.events.filter(event => !["开始任务", "收到消息", "模型返回"].includes(event.label))
   const newestAction = activity.at(-1)
-  const taskPages = run.pages.filter(page => page.role === "task").length
+  const taskPages = run.pages.filter(page => page.role === "task")
+  const waiting = busy || Boolean(run.inFlight)
+  const resumable = current && live && !running && run.status !== "complete" && run.status !== "interrupted"
+  const canFocus = live && run.focusTabId !== undefined && run.status !== "interrupted" &&
+    (run.status !== "complete" || !taskPages.length)
   return <article className="assistant-message" aria-label="TabErrand 回复">
     <div className="assistant-head">
       <span className="mark mini" aria-hidden="true" /><strong>TabErrand</strong>
@@ -66,18 +72,39 @@ export function RunView({ run, current, busy, pause, resume, authorize, focus, s
       ? [newestAction.label, newestAction.detail].filter(Boolean).join(" · ")
       : "正在准备回复…"}</p>}
     {run.reason && <p className="notice warning">{run.reason}</p>}
-    {current && (running || run.requestedOrigin || run.focusTabId !== undefined ||
-      (run.status !== "complete" && run.status !== "interrupted")) && <div className="actions">
-      {running && <button className="secondary" onClick={pause}>暂停任务</button>}
-      {!running && run.requestedOrigin &&
+    {(running || resumable || canFocus) && <div className="actions">
+      {running && <button className="secondary" disabled={busy} onClick={pause}>暂停任务</button>}
+      {running && canFocus && <button className="secondary" disabled={busy} onClick={takeOver}>接管网页</button>}
+      {resumable && run.requestedOrigin &&
         <button className="primary" disabled={busy} onClick={authorize}>授权并继续</button>}
-      {!running && !run.requestedOrigin && run.status !== "complete" && run.status !== "interrupted" &&
-        <button className="primary" disabled={busy || Boolean(run.inFlight)} onClick={resume}>继续任务</button>}
-      {run.focusTabId !== undefined && run.status !== "interrupted" &&
-        <button className="secondary" disabled={busy} onClick={focus}>打开当前页</button>}
+      {resumable && !run.requestedOrigin &&
+        <button className="primary" disabled={waiting} onClick={resume}>继续任务</button>}
+      {!running && canFocus && <button className="secondary" disabled={waiting} onClick={() => focus()}>
+        {run.pageAction ? "打开原页" : "打开当前页"}
+      </button>}
+    </div>}
+    {live && taskPages.length > 0 && <div className="task-pages">
+      <details>
+        <summary>任务标签页 · {taskPages.length}</summary>
+        <ul aria-label="本次任务打开的标签页">
+          {taskPages.map(page => {
+            const url = new URL(page.url ?? page.observation?.url ?? page.origin)
+            const path = url.pathname === "/" ? "" : url.pathname
+            const label = page.title === url.hostname ? path || url.host : page.title
+            const location = label === path ? url.host : url.host + path
+            return <li key={page.id}>
+              <button type="button" className="task-page" disabled={running || waiting}
+                title={url.host + path} onClick={() => focus(page.id)}>
+                <span>{label}</span>{label !== location && <small>{location}</small>}
+              </button>
+            </li>
+          })}
+        </ul>
+      </details>
+      {!running && <button className="small plain" disabled={waiting} onClick={cleanup}>关闭任务标签页</button>}
     </div>}
     {!!activity.length && <details className="activity">
-      <summary>执行记录{taskPages ? " · " + taskPages + " 个任务页" : ""}{run.evidence.length
+      <summary>执行记录{run.evidence.length
         ? " · " + run.evidence.length + " 条来源" : ""}</summary>
       <ol>
         {activity.slice().reverse().map(event => <li key={event.id}>
@@ -85,8 +112,6 @@ export function RunView({ run, current, busy, pause, resume, authorize, focus, s
           <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</span>
         </li>)}
       </ol>
-      {current && !running && run.status !== "interrupted" && taskPages > 0 &&
-        <button className="small plain" disabled={busy || Boolean(run.inFlight)} onClick={cleanup}>关闭任务标签页</button>}
     </details>}
     {run.answer && <Reply text={run.answer} />}
     {run.report && <>

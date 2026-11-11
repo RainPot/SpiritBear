@@ -1,11 +1,11 @@
 import { parseToolCall, requestedSourceCount } from "../src/agent/contracts"
 import { evidenceDraft } from "../src/agent/report"
-import { getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
+import { getPage, getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
 import { requiresSearchBox } from "../src/browser/search-proof"
 import { cleanPageUrl, hostPattern, pageOrigin } from "../src/browser/urls"
 import { executeStep, toolLabels } from "../src/run/execute"
 import { changeRun, clearRuns, createRun, getRun, listRuns } from "../src/run/store"
-import { addEvent, conversationId, type PanelCommand, type PanelReply, type PanelRequest, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
+import { addEvent, conversationId, pageActionLabels, type PanelCommand, type PanelReply, type PanelRequest, type RunHistory, type RunPage, type RunState, type StartInput, type ToolResult } from "../src/run/state"
 
 const workerEpoch = crypto.randomUUID()
 const owners = new Map<string, chrome.runtime.Port>()
@@ -89,6 +89,8 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
   if (!task || task.length > 6000) throw new Error("请填写 1 到 6000 字的任务")
   if (input.provider !== "openai" && input.provider !== "deepseek") throw new Error("请选择模型供应商")
   if (input.references.length > 12) throw new Error("一条任务最多引用 12 个标签页")
+  if (input.pageAction !== undefined && (!Object.hasOwn(pageActionLabels, input.pageAction) ||
+    input.references.length !== 1 || input.startUrl)) throw new Error("请选择一个网页进行总结或翻译")
   const window = await chrome.windows.get(input.windowId)
   if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用 TabErrand")
   const session = await sessionId()
@@ -104,6 +106,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
       if (explicit) throw new Error("参考页已关闭或跳转，请重新选择标签页")
       continue
     }
+    if (input.pageAction && !tab.active) throw new Error("活动标签页已切换，请重新点击网页快捷操作")
     if (!explicit && !await chrome.permissions.contains({ origins: [hostPattern(ref.origin)] })) continue
     if (pages.some(page => page.tabId === ref.tabId)) continue
     pages.push({ ...ref, title: (tab.title || ref.title).slice(0, 160), role: "reference", id: crypto.randomUUID() })
@@ -127,7 +130,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     id, session, owner, windowId: input.windowId,
     conversationId: previous ? conversationId(previous) : id,
     references: explicit ? pages.map(page => page.title) : undefined,
-    task, provider: input.provider, startUrl, pages, allowedOrigins: [...origins],
+    task, provider: input.provider, pageAction: input.pageAction, startUrl, pages, allowedOrigins: [...origins],
     criteria: { sourceCount: fixedCount ?? Math.max(pages.length, 1), topics: [] },
     fixedCount, evidence: inherited, events: [], tokens: 0, steps: 0,
     createdAt: now, updatedAt: now, status: "running",
@@ -213,7 +216,7 @@ async function step(id: string, owner: string, name: string, raw: string): Promi
 async function commandFor(owner: string, command: PanelCommand): Promise<unknown> {
   switch (command.kind) {
     case "ping": return true
-    case "history": return reconcile()
+    case "history": return { session: await sessionId(), runs: await reconcile() } satisfies RunHistory
     case "start": return start(command.input, owner)
     case "resume": return resume(command.id, owner)
     case "pause": return pause(command.id, owner, command.reason)
@@ -278,8 +281,10 @@ async function commandFor(owner: string, command: PanelCommand): Promise<unknown
     case "focus": {
       const run = await getRun(command.id)
       if (run.session !== await sessionId()) throw new Error("任务标签页属于上次浏览器会话")
-      if (run.focusTabId === undefined) throw new Error("任务尚未打开页面")
-      const tab = await getTab(run.focusTabId, run.windowId)
+      if (run.status === "running" || run.inFlight) throw new Error("请先暂停任务，等待在途操作返回")
+      const page = command.pageId ? getPage(run, command.pageId) : run.pages.find(item => item.tabId === run.focusTabId)
+      if (!page) throw new Error("任务尚未打开页面")
+      const tab = await getTab(page.tabId, run.windowId)
       await chrome.tabs.update(tab.id!, { active: true })
       await chrome.windows.update(run.windowId, { focused: true })
       return true

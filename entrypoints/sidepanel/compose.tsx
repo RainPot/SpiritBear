@@ -1,14 +1,20 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { pageOrigin } from "../../src/browser/urls"
-import type { PageRef } from "../../src/run/state"
+import { pageActionLabels, type PageAction, type PageRef } from "../../src/run/state"
 
 interface Props {
   disabled: boolean
   providerLabel: string
-  onSend: (task: string, references: PageRef[], startUrl: string, windowId?: number) => void
+  onSend: (task: string, references: PageRef[], startUrl: string, windowId?: number, pageAction?: PageAction) => void
 }
 
 const mentionPattern = /@([^@\s，。]*)$/
+
+function tabReference(tab: chrome.tabs.Tab): PageRef | undefined {
+  const origin = pageOrigin(tab.url ?? "")
+  if (!origin || tab.id === undefined || tab.incognito) return
+  return { tabId: tab.id, origin, title: tab.title || new URL(origin).hostname }
+}
 
 export function Compose({ disabled, providerLabel, onSend }: Props) {
   const [task, setTask] = useState("")
@@ -16,6 +22,7 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
   const [showUrl, setShowUrl] = useState(false)
   const [refs, setRefs] = useState<PageRef[]>([])
   const [tabs, setTabs] = useState<PageRef[]>([])
+  const [activeTab, setActiveTab] = useState<{ page: PageRef; windowId: number }>()
   const [windowId, setWindowId] = useState<number>()
   const [picker, setPicker] = useState(false)
   const [mention, setMention] = useState<{ start: number; end: number; term: string }>()
@@ -27,6 +34,29 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
   const matches = tabs.filter(tab => !refs.some(ref => ref.tabId === tab.tabId) &&
     (tab.title.toLowerCase().includes(term) || tab.origin.includes(term))).slice(0, 10)
 
+  useEffect(() => {
+    let lookup = 0
+    function refresh() {
+      const request = ++lookup
+      void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (request !== lookup) return
+        const page = tab && tabReference(tab)
+        setActiveTab(page ? { page, windowId: tab.windowId } : undefined)
+      }, () => { if (request === lookup) setActiveTab(undefined) })
+    }
+    function updated(_id: number, changes: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) {
+      if (tab.active && (changes.url !== undefined || changes.title !== undefined)) refresh()
+    }
+    chrome.tabs.onActivated.addListener(refresh)
+    chrome.tabs.onUpdated.addListener(updated)
+    refresh()
+    return () => {
+      lookup += 1
+      chrome.tabs.onActivated.removeListener(refresh)
+      chrome.tabs.onUpdated.removeListener(updated)
+    }
+  }, [])
+
   async function openPicker() {
     setPicker(true)
     setFocused(0)
@@ -36,10 +66,7 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
       if (current.id === undefined || current.incognito || current.type !== "normal") throw new Error("请在普通 Chrome 窗口选择标签页")
       const opened = await chrome.tabs.query({ windowId: current.id })
       setWindowId(current.id)
-      setTabs(opened.flatMap(tab => {
-        const origin = pageOrigin(tab.url ?? "")
-        return origin && tab.id !== undefined ? [{ tabId: tab.id, origin, title: tab.title || new URL(origin).hostname }] : []
-      }))
+      setTabs(opened.map(tabReference).filter(ref => ref !== undefined))
     } catch (error) {
       setPickerError(error instanceof Error ? error.message : "读取标签页列表失败")
     }
@@ -86,6 +113,15 @@ export function Compose({ disabled, providerLabel, onSend }: Props) {
   }
 
   return <div className="composer">
+    {activeTab && !task && !refs.length && !startUrl && !picker &&
+      <div className="page-shortcuts" role="group" aria-label="网页快捷操作">
+        {(["summarize", "translate"] as const).map(action =>
+          <button key={action} type="button" className="secondary small" disabled={disabled}
+            title={activeTab.page.title}
+            onClick={() => onSend(pageActionLabels[action], [activeTab.page], "", activeTab.windowId, action)}>
+            {pageActionLabels[action]}
+          </button>)}
+      </div>}
     {picker && <div className="tab-picker" id="tab-options" role="listbox" aria-label="当前窗口标签页">
       {matches.map((tab, index) => <button type="button" role="option" aria-selected={focused === index}
         className="tab-option" key={tab.tabId} onClick={() => choose(tab)}>

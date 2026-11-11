@@ -81,7 +81,7 @@ export async function completeChat(
       body: JSON.stringify({
         model: profile.model,
         messages,
-        tools,
+        ...(tools.length ? { tools } : {}),
         stream: false,
         ...(profile.id === "deepseek" ? { thinking: { type: "disabled" } } : {}),
         ...(namedTool ? { tool_choice: { type: "function", function: { name: namedTool } } } : {}),
