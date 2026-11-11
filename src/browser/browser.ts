@@ -106,7 +106,7 @@ export async function newTaskPage(run: RunState, url: string): Promise<{ page: R
   if (groupId === undefined) {
     groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId: run.windowId } }).catch(() => undefined)
     if (groupId !== undefined) {
-      await chrome.tabGroups.update(groupId, { title: "TabErrand · " + run.task.slice(0, 15), color: "purple" }).catch(() => undefined)
+      await chrome.tabGroups.update(groupId, { title: "TabErrand · " + run.task.slice(0, 15), color: "green" }).catch(() => undefined)
     }
   }
   const page: RunPage = { id: crypto.randomUUID(), tabId, origin, title: new URL(url).hostname, role: "task" }
