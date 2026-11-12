@@ -1,4 +1,5 @@
 import { parseToolCall, requestedSourceCount } from "../src/agent/contracts"
+import { attachmentSummary, validateAttachments } from "../src/agent/attachments"
 import { isProviderId } from "../src/agent/provider"
 import { evidenceDraft, replyMarkdown } from "../src/agent/report"
 import { getPage, getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
@@ -95,8 +96,10 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
   if (!task || task.length > 6000) throw new Error("请填写 1 到 6000 字的任务")
   if (!isProviderId(input.provider)) throw new Error("请选择模型供应商")
   if (input.references.length > 12) throw new Error("一条任务最多引用 12 个标签页")
+  const attachments = input.attachments ?? []
+  validateAttachments(attachments)
   if (input.pageAction !== undefined && (!Object.hasOwn(pageActionLabels, input.pageAction) ||
-    input.references.length !== 1 || input.startUrl || input.currentPage)) throw new Error("请选择一个网页进行总结或翻译")
+    input.references.length !== 1 || input.startUrl || input.currentPage || attachments.length)) throw new Error("请选择一个网页进行总结或翻译")
   const window = await chrome.windows.get(input.windowId)
   if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用 TabErrand")
   const session = await sessionId()
@@ -147,6 +150,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     id, session, owner, windowId: input.windowId,
     conversationId: previous ? conversationId(previous) : id,
     references: pages.length ? pages.map(page => page.title) : undefined,
+    attachments: attachments.length ? attachments.map(attachmentSummary) : undefined,
     task, provider: input.provider, model: input.model, pageAction: input.pageAction, startUrl, pages, activePageId,
     allowedOrigins: [...origins],
     criteria: { sourceCount: fixedCount ?? Math.max(explicitCount, 1), topics: [] },
@@ -154,7 +158,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     createdAt: now, updatedAt: now, activeSince: now, activeDurationMs: 0, status: "running",
   }
   addEvent(run, "收到消息", pages.length ? "引用 " + pages.length + " 个标签页" : startUrl ? new URL(startUrl).hostname : undefined)
-  return announce(await createRun(run))
+  return announce(await createRun(run, attachments))
 }
 
 async function resume(id: string, owner: string): Promise<RunState> {

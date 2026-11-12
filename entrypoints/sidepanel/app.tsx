@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import type { ChatAttachment } from "../../src/agent/attachments"
 import type { ProviderProfile } from "../../src/agent/provider"
 import { providerForRun, readModelSettings, type ModelChoice } from "../../src/agent/settings"
 import { hostPattern, pageOrigin } from "../../src/browser/urls"
@@ -6,6 +7,8 @@ import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
 import { requestsMarkdown } from "../../src/run/intent"
 import { conversationId, type RunHistory, type RunState } from "../../src/run/state"
+import { readRunAttachments } from "../../src/run/store"
+import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
@@ -27,6 +30,7 @@ export function App() {
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<{ id: string; text: string }>()
+  const [attachmentPreview, setAttachmentPreview] = useState<ChatAttachment>()
   const [awayFromEnd, setAwayFromEnd] = useState(false)
   const lock = useRef(false)
   const clientRef = useRef<PanelClient | null>(null)
@@ -35,6 +39,7 @@ export function App() {
   const followTail = useRef(true)
   const turns = runs.filter(item => conversationId(item) === threadId).reverse()
   const last = turns.at(-1)
+  const lastAttachments = turns.findLast(item => item.attachments?.length)
   const runningRun = runs.find(item => item.status === "running")
   const running = Boolean(runningRun)
   const threads = new Map<string, RunState>()
@@ -226,6 +231,7 @@ export function App() {
     setThreadId(id)
     setSection("chat")
     setError("")
+    setAttachmentPreview(undefined)
     setShowHistory(false)
     setDraftVersion(version => version + 1)
     followTail.current = true
@@ -235,6 +241,16 @@ export function App() {
   function selectModel(value: ModelChoice) {
     setModels(current => ({ ...current, selected: value }))
     void chrome.storage.local.set({ selectedModel: value }).catch(error => setError(message(error)))
+  }
+
+  async function openAttachment(runId: string, attachmentId: string) {
+    try {
+      const item = (await readRunAttachments(runId)).find(attachment => attachment.id === attachmentId)
+      if (!item) throw new Error("本地附件已清除")
+      setAttachmentPreview(item)
+    } catch (error) {
+      setError(message(error))
+    }
   }
 
   return <main className="shell">
@@ -276,13 +292,14 @@ export function App() {
       }}>
         {!turns.length && <div className="welcome">
           <h1>在浏览器里做什么？</h1>
-          <p>提问、读网页或找资料。用 <strong>@</strong> 加入其他标签页。</p>
+          <p>提问、读网页或分析文件。用 <strong>@</strong> 引用标签页。</p>
         </div>}
         {turns.map(run => <section className="turn" key={run.id} aria-label="对话轮次">
           <div className="user-message">
             {!!run.references?.length && <ul className="sent-references" aria-label="引用的标签页">
               {run.references.map((title, index) => <li key={index}>@ {title}</li>)}
             </ul>}
+            <AttachmentList items={run.attachments ?? []} onOpen={id => void openAttachment(run.id, id)} />
             <p>{run.task}</p>
           </div>
           <RunView run={run} preview={preview?.id === run.id ? preview.text : undefined}
@@ -304,8 +321,9 @@ export function App() {
         }}><ChatIcon name="down" /></button>}
     </div>}
     <Compose key={draftVersion} busy={busy} hidden={section !== "chat"} running={running}
-      connections={models.connections} model={models.selected} onModel={selectModel}
+      connections={models.connections} model={models.selected} onModel={selectModel} previousAttachmentsRunId={lastAttachments?.id}
       onSettings={() => { setSection("settings"); setShowHistory(false); setError("") }}
       onPause={() => { if (runningRun) pauseRun(runningRun) }} onSend={send} />
+    {attachmentPreview && <AttachmentPreview item={attachmentPreview} onClose={() => setAttachmentPreview(undefined)} />}
   </main>
 }

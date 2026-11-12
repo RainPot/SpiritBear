@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { attachmentBudgetError, maxAttachments, type ChatAttachment } from "../../src/agent/attachments"
+import { readAttachment } from "../../src/agent/read-attachment"
 import type { ModelChoice, ModelConnection } from "../../src/agent/settings"
 import { pageOrigin } from "../../src/browser/urls"
 import { requestsMarkdown } from "../../src/run/intent"
 import { pageActionLabels, type PageRef, type StartInput } from "../../src/run/state"
+import { readRunAttachments } from "../../src/run/store"
+import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 
 export type ComposeMessage = Omit<StartInput, "provider" | "model" | "previousRunId" | "windowId"> & { windowId?: number }
@@ -12,6 +16,7 @@ interface Props {
   running: boolean
   connections: ModelConnection[]
   model?: ModelChoice
+  previousAttachmentsRunId?: string
   onModel: (model: ModelChoice) => void
   onSettings: () => void
   onPause: () => void
@@ -28,7 +33,7 @@ function tabReference(tab: chrome.tabs.Tab): PageRef | undefined {
 
 const modelKey = (choice: ModelChoice) => JSON.stringify([choice.provider, choice.model])
 
-export function Compose({ busy, hidden, running, connections, model, onModel, onSettings, onPause, onSend }: Props) {
+export function Compose({ busy, hidden, running, connections, model, previousAttachmentsRunId, onModel, onSettings, onPause, onSend }: Props) {
   const [task, setTask] = useState("")
   const [startUrl, setStartUrl] = useState("")
   const [showUrl, setShowUrl] = useState(false)
@@ -42,8 +47,15 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
   const [mention, setMention] = useState<{ start: number; end: number; term: string }>()
   const [focused, setFocused] = useState(0)
   const [pickerError, setPickerError] = useState("")
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState("")
+  const [reading, setReading] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [preview, setPreview] = useState<ChatAttachment>()
   const editor = useRef<HTMLTextAreaElement>(null)
   const attachmentButton = useRef<HTMLButtonElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const readingLock = useRef(false)
   const focusWhenReady = useRef(true)
 
   const term = mention?.term.toLowerCase() ?? ""
@@ -118,10 +130,60 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
     editor.current?.focus()
   }
 
+  async function addAttachments(load: (limit: number) => Promise<{ items: ChatAttachment[]; errors?: string[] }>) {
+    if (busy || readingLock.current) return
+    const remaining = maxAttachments - attachments.length
+    if (!remaining) {
+      setAttachmentError("每条消息最多添加 " + maxAttachments + " 个附件")
+      return
+    }
+    readingLock.current = true
+    setReading(true)
+    setAttachmentError("")
+    try {
+      const { items, errors = [] } = await load(remaining)
+      const next = [...attachments]
+      for (const item of items) {
+        if (next.some(existing => existing.id === item.id)) continue
+        const error = attachmentBudgetError([...next, item])
+        if (error) errors.push(error)
+        else next.push(item)
+      }
+      setAttachments(next)
+      setAttachmentError([...new Set(errors)].join("。"))
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "读取附件失败")
+    } finally {
+      readingLock.current = false
+      setReading(false)
+    }
+  }
+
+  function addFiles(files: File[], pasted = false) {
+    if (!files.length) return
+    void addAttachments(async limit => {
+      const items: ChatAttachment[] = []
+      const errors: string[] = []
+      for (const file of files.slice(0, limit)) {
+        try {
+          items.push(await readAttachment(file, pasted))
+        } catch (error) {
+          errors.push((file.name.slice(0, 80) || "附件") + " · " + (error instanceof Error ? error.message : "读取失败"))
+        }
+      }
+      if (files.length > limit) errors.push("其余文件可在下一条消息添加")
+      return { items, errors }
+    })
+  }
+
   function submit(event?: FormEvent) {
     event?.preventDefault()
-    if (busy || running || !task.trim()) return
-    onSend({ task, references: refs, currentPage: current, startUrl, windowId: windowId ?? activeTab?.windowId })
+    if (busy || running || readingLock.current || (!task.trim() && !attachments.length)) return
+    onSend({
+      task: task.trim() || "请阅读附件并概括主要内容。",
+      references: refs, attachments: attachments.length ? attachments : undefined,
+      currentPage: current, startUrl, windowId: windowId ?? activeTab?.windowId,
+    })
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -146,7 +208,7 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
   }
 
   return <div className="composer" hidden={hidden}>
-    {activeTab && !running && !task && !refs.length && !startUrl && !picker &&
+    {activeTab && !running && !task && !refs.length && !attachments.length && !reading && !startUrl && !picker &&
       <div className="page-shortcuts" role="group" aria-label="网页快捷操作">
         {(["summarize", "translate"] as const).map(action =>
           <button key={action} type="button" className="plain small" disabled={busy}
@@ -164,7 +226,41 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
       </button>)}
       {!matches.length && <p className="empty">{pickerError || "当前窗口没有匹配的 HTTPS 标签页。"}</p>}
     </div>}
-    <form className="compose" onSubmit={submit}>
+    <form className={dragging ? "compose is-dragging" : "compose"} onSubmit={submit}
+      onPaste={event => {
+        const files = Array.from(event.clipboardData.files)
+        if (!files.length) return
+        event.preventDefault()
+        addFiles(files, true)
+      }}
+      onDragOver={event => {
+        if (!event.dataTransfer.types.includes("Files")) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = busy || reading ? "none" : "copy"
+        if (!busy && !reading) setDragging(true)
+      }}
+      onDragLeave={event => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false)
+      }}
+      onDrop={event => {
+        if (!event.dataTransfer.types.includes("Files")) return
+        event.preventDefault()
+        setDragging(false)
+        addFiles(Array.from(event.dataTransfer.files))
+      }}>
+      <input type="file" ref={fileInput} multiple hidden aria-label="选择本地附件" onChange={event => {
+        addFiles(Array.from(event.currentTarget.files ?? []))
+        event.currentTarget.value = ""
+      }} />
+      <AttachmentList items={attachments} disabled={busy || reading}
+        onOpen={id => setPreview(attachments.find(item => item.id === id))}
+        onRemove={id => {
+          setAttachments(items => items.filter(item => item.id !== id))
+          setAttachmentError("")
+        }} />
+      {(reading || dragging) && <p className="attachment-status" role="status">{reading ? "正在读取附件…" : "松开以添加附件"}</p>}
+      {!!attachments.length && !reading && !dragging && <p className="attachment-status">附件随消息发送给所选模型</p>}
+      {attachmentError && <p className="attachment-error" role="alert">{attachmentError}</p>}
       {(auto || refs.length > 0) && <ul className="reference-list" aria-label="已选参考标签页">
         {auto && <li>
           <span title={auto.title}><strong>当前页</strong> · {auto.title}</span>
@@ -184,7 +280,7 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
       <textarea ref={editor} aria-label="任务指令" value={task} maxLength={6000} disabled={busy}
         aria-controls={picker ? "tab-options" : undefined} rows={1}
         aria-activedescendant={picker && matches[focused] ? "tab-option-" + matches[focused].tabId : undefined}
-        placeholder={running ? "可以先写下一条消息" : "问个问题，或请我操作网页"}
+        placeholder={running ? "可以先写下一条消息" : "发消息，或粘贴截图"}
         onKeyDown={onKeyDown}
         onChange={event => {
           const value = event.target.value
@@ -210,10 +306,23 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
             attachmentButton.current?.focus()
           }
         }}>
-          <button ref={attachmentButton} type="button" className="icon-button add-context" disabled={busy}
-            title="添加标签页或网址" aria-label="添加标签页或网址" aria-expanded={attachmentOpen}
-            onClick={() => { setPicker(false); setAttachmentOpen(!attachmentOpen) }}><ChatIcon name="add" size={19} /></button>
-          {attachmentOpen && <div className="attachment-menu" role="group" aria-label="添加网页上下文">
+          <button ref={attachmentButton} type="button" className="plain small add-context" disabled={busy || reading}
+            title="添加截图、文件、标签页或网址" aria-label="添加附件" aria-expanded={attachmentOpen}
+            onClick={() => { setPicker(false); setAttachmentOpen(!attachmentOpen) }}>
+            <ChatIcon name="add" size={17} /><span>附件</span>
+          </button>
+          {attachmentOpen && <div className="attachment-menu" role="group" aria-label="添加附件和网页">
+            <button type="button" className="plain" onClick={() => {
+              setAttachmentOpen(false)
+              fileInput.current?.click()
+            }}>添加截图或文件</button>
+            {previousAttachmentsRunId && <button type="button" className="plain" onClick={() => {
+              setAttachmentOpen(false)
+              void addAttachments(async () => {
+                const items = await readRunAttachments(previousAttachmentsRunId)
+                return { items, errors: items.length ? [] : ["本地附件已清除"] }
+              })
+            }}>复用上次附件</button>}
             <button type="button" className="plain" disabled={refs.length >= 12}
               onClick={() => { void openPicker(); editor.current?.focus() }}>@ 标签页</button>
             <button type="button" className="plain" onClick={() => {
@@ -234,11 +343,12 @@ export function Compose({ busy, hidden, running, connections, model, onModel, on
           </select> : <button type="button" className="plain small" disabled={busy} onClick={onSettings}>连接模型</button>}
           {running ? <button type="button" className="send" title="暂停当前任务" aria-label="暂停当前任务" disabled={busy} onClick={onPause}>
             <ChatIcon name="stop" size={19} />
-          </button> : <button className="send" type="submit" title="发送" aria-label="发送" disabled={busy || !task.trim()}>
+          </button> : <button className="send" type="submit" title="发送" aria-label="发送" disabled={busy || reading || (!task.trim() && !attachments.length)}>
             <ChatIcon name="send" size={18} />
           </button>}
         </div>
       </div>
     </form>
+    {preview && <AttachmentPreview item={preview} onClose={() => setPreview(undefined)} />}
   </div>
 }

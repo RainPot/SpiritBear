@@ -1,4 +1,5 @@
 import type { SearchSnapshot } from "../browser/search-proof"
+import type { AttachmentSummary, ChatAttachment } from "../agent/attachments"
 import type { ProviderId } from "../agent/provider"
 import type { Artifact, Criteria, Evidence } from "../agent/report"
 
@@ -39,6 +40,7 @@ export interface RunState {
   session: string
   conversationId?: string
   references?: string[]
+  attachments?: AttachmentSummary[]
   owner?: string
   windowId: number
   task: string
@@ -81,6 +83,7 @@ export interface StartInput {
   provider: ProviderId
   model?: string
   references: PageRef[]
+  attachments?: ChatAttachment[]
   currentPage?: PageRef
   pageAction?: PageAction
   previousRunId?: string

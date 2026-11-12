@@ -54,8 +54,14 @@ const toolCallSchema = z.object({
 
 export type ModelToolCall = z.infer<typeof toolCallSchema>
 
+export type UserContent = string | (
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+)[]
+
 export type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: UserContent }
   | { role: "assistant"; content: string | null; tool_calls?: ModelToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string }
 
@@ -119,6 +125,10 @@ export async function completeChat(
     if (response.status === 401 || response.status === 403) throw new Error("模型 API 拒绝鉴权，请检查 API Key 和模型访问权限")
     if (response.status === 429) throw new Error("模型 API 限流或配额不足")
     if (response.status === 402) throw new Error("模型 API 余额不足")
+    if ([400, 415, 422].includes(response.status) && messages.some(message => message.role === "user" &&
+        Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))) {
+      throw new Error("模型 API 返回 HTTP " + response.status + "，请确认所选模型支持图片输入")
+    }
     throw new Error("模型 API 返回 HTTP " + response.status + "，请检查模型 ID 与工具调用支持")
   }
 

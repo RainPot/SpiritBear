@@ -1,6 +1,17 @@
+import { readdirSync } from "node:fs"
+import { createRequire } from "node:module"
+import { dirname, join } from "node:path"
 import { defineConfig } from "wxt"
 
+const require = createRequire(import.meta.url)
+
 export default defineConfig({
+  hooks: {
+    "build:publicAssets"(_wxt, files) {
+      const cmaps = join(dirname(require.resolve("pdfjs-dist/package.json")), "cmaps")
+      for (const file of readdirSync(cmaps)) files.push({ absoluteSrc: join(cmaps, file), relativeDest: "pdf-cmaps/" + file })
+    },
+  },
   manifest: {
     name: "TabErrand",
     minimum_chrome_version: "116",

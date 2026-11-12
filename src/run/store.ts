@@ -1,4 +1,5 @@
 import { openDB, type DBSchema } from "idb"
+import type { ChatAttachment } from "../agent/attachments"
 import type { RunState } from "./state"
 
 interface RunDatabase extends DBSchema {
@@ -6,14 +7,19 @@ interface RunDatabase extends DBSchema {
     key: string
     value: RunState
   }
+  attachments: {
+    key: string
+    value: ChatAttachment[]
+  }
 }
 
 let database: ReturnType<typeof openDB<RunDatabase>> | undefined
 
 function db() {
-  return database ??= openDB<RunDatabase>("taberrand", 1, {
-    upgrade(connection) {
-      connection.createObjectStore("runs", { keyPath: "id" })
+  return database ??= openDB<RunDatabase>("taberrand", 2, {
+    upgrade(connection, previousVersion) {
+      if (previousVersion === 0) connection.createObjectStore("runs", { keyPath: "id" })
+      if (previousVersion < 2) connection.createObjectStore("attachments")
     },
   })
 }
@@ -29,13 +35,22 @@ export async function getRun(id: string): Promise<RunState> {
   return run
 }
 
-export async function createRun(run: RunState): Promise<RunState> {
-  const tx = (await db()).transaction("runs", "readwrite")
-  const runs = await tx.store.getAll()
+export async function readRunAttachments(id: string): Promise<ChatAttachment[]> {
+  return await (await db()).get("attachments", id) ?? []
+}
+
+export async function createRun(run: RunState, attachments: ChatAttachment[] = []): Promise<RunState> {
+  const tx = (await db()).transaction(["runs", "attachments"], "readwrite")
+  const runStore = tx.objectStore("runs")
+  const attachmentStore = tx.objectStore("attachments")
+  const runs = await runStore.getAll()
   if (runs.some(item => item.status === "running" || item.inFlight)) throw new Error("已有运行中的任务，请先暂停")
-  await tx.store.add(run)
+  await runStore.add(run)
+  if (attachments.length) await attachmentStore.add(attachments, run.id)
   const expired = runs.sort((a, b) => b.createdAt - a.createdAt).slice(19)
-  await Promise.all(expired.map(item => tx.store.delete(item.id)))
+  await Promise.all(expired.flatMap(item => [
+    runStore.delete(item.id), ...(item.attachments?.length ? [attachmentStore.delete(item.id)] : []),
+  ]))
   await tx.done
   return run
 }
@@ -65,9 +80,10 @@ export async function changeRun(id: string, update: (run: RunState) => void): Pr
 }
 
 export async function clearRuns(): Promise<void> {
-  const tx = (await db()).transaction("runs", "readwrite")
-  const runs = await tx.store.getAll()
+  const tx = (await db()).transaction(["runs", "attachments"], "readwrite")
+  const runStore = tx.objectStore("runs")
+  const runs = await runStore.getAll()
   if (runs.some(item => item.status === "running" || item.inFlight)) throw new Error("请先暂停当前任务，等待在途操作返回")
-  await tx.store.clear()
+  await Promise.all([runStore.clear(), tx.objectStore("attachments").clear()])
   await tx.done
 }
