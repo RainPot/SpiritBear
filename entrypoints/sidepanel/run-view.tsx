@@ -2,9 +2,11 @@ import { memo, useEffect, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import { replyMarkdown } from "../../src/agent/report"
 import { getExtensionName } from "../../src/extension-name"
+import type { Translate } from "../../src/i18n"
 import { requestsMarkdown } from "../../src/run/intent"
-import type { RunState } from "../../src/run/state"
+import type { RunEvent, RunState } from "../../src/run/state"
 import { ChatIcon } from "./chat-icon"
+import { useLanguage } from "./language"
 
 export function runLabel(run: RunState): string {
   if (run.status === "complete") {
@@ -45,11 +47,11 @@ const Reply = memo(function Reply({ text, streaming }: { text: string; streaming
 
 const backgroundEvents = new Set(["开始任务", "收到消息", "模型返回", "已保存 Markdown", "请求保存 Markdown", "下载未完成", "已清理任务标签页"])
 
-function elapsedLabel(ms: number) {
+function elapsedLabel(ms: number, t: Translate) {
   const seconds = Math.max(0, Math.floor(ms / 1000))
-  if (!seconds) return "不到 1 秒"
-  if (seconds < 60) return seconds + " 秒"
-  return Math.floor(seconds / 60) + " 分 " + seconds % 60 + " 秒"
+  if (!seconds) return t("不到 1 秒")
+  if (seconds < 60) return t("{seconds} 秒", { seconds })
+  return t("{minutes} 分 {seconds} 秒", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
 }
 
 function actionLabel(label: string, detail?: string) {
@@ -59,7 +61,19 @@ function actionLabel(label: string, detail?: string) {
   return label
 }
 
+function activityDetail({ label, detail = "", outcome }: RunEvent, t: Translate) {
+  if (outcome === "rejected" || outcome === "unknown") return t(detail)
+  if (label === "操作查询控件") {
+    const search = detail.match(/^(搜索「.*」) · (.+)$/s)
+    if (search?.[1] && search[2]) return t(search[1]) + " · " + t(search[2])
+  }
+  if (label === "验收报告") return detail.split("；").map(part => t(part)).join(t("；"))
+  if (label === "读取页面" || (label === "采集来源" && !detail.startsWith("复用已采集来源 · "))) return detail
+  return t(detail)
+}
+
 function RunProcess({ run, replying, children }: { run: RunState; replying: boolean; children?: ReactNode }) {
+  const { t } = useLanguage()
   const running = run.status === "running"
   const [now, setNow] = useState(Date.now)
 
@@ -72,43 +86,43 @@ function RunProcess({ run, replying, children }: { run: RunState; replying: bool
 
   const activity = run.events.filter(event => !backgroundEvents.has(event.label))
   const plan = run.planSummary || (run.query
-    ? "围绕「" + run.query + "」查找 " + run.criteria.sourceCount + " 条资料，并核对来源。"
+    ? t("围绕「{query}」查找 {count} 条资料，并核对来源。", { query: run.query, count: run.criteria.sourceCount })
     : "")
   const active = running ? run.inFlight : undefined
   const elapsed = (run.activeDurationMs ?? (running ? 0 : run.updatedAt - run.createdAt)) +
     (running ? Math.max(0, now - (run.activeSince ?? run.createdAt)) : 0)
   const action = active ? actionLabel(active.label) : undefined
   const progress = active?.label === "操作查询控件" && active.detail
-    ? "正在搜索「" + active.detail + "」"
-    : action ? "正在" + action : replying ? "正在回复" : "正在思考"
+    ? t("正在搜索「{query}」", { query: active.detail })
+    : t(action ? "正在" + action : replying ? "正在回复" : "正在思考")
   const status = runLabel(run)
   const expandable = running || Boolean(activity.length || plan || children)
   const line = <>
     {running && <span className="process-dot" aria-hidden="true" />}
     <span className="process-title" role={running ? "status" : undefined}>
-      {running ? progress : "用时 " + elapsedLabel(elapsed)}
+      {running ? progress : t("用时 {duration}", { duration: elapsedLabel(elapsed, t) })}
     </span>
     {expandable && <span className="process-chevron"><ChatIcon name="chevron" size={13} /></span>}
-    {running && elapsed >= 1000 && <span className="process-outcome" aria-hidden="true">{elapsedLabel(elapsed)}</span>}
-    {!running && status !== "已回复" && <span className="process-outcome" role="status">{status}</span>}
+    {running && elapsed >= 1000 && <span className="process-outcome" aria-hidden="true">{elapsedLabel(elapsed, t)}</span>}
+    {!running && status !== "已回复" && <span className="process-outcome" role="status">{t(status)}</span>}
   </>
 
   if (!expandable) return <div className="process-row">{line}</div>
-  return <details className="process" aria-label="思考摘要与操作记录">
-    <summary className="process-row" title="查看思考摘要与操作记录">{line}</summary>
+  return <details className="process" aria-label={t("思考摘要与操作记录")}>
+    <summary className="process-row" title={t("查看思考摘要与操作记录")}>{line}</summary>
     <div className="process-body">
       {plan && <p className="process-plan">{plan}</p>}
-      {(activity.length > 0 || active) && <ol className="activity" aria-label="操作记录">
+      {(activity.length > 0 || active) && <ol className="activity" aria-label={t("操作记录")}>
         {activity.map(event => <li key={event.id} className={event.outcome === "rejected" || event.outcome === "unknown" ? "activity-warning" : undefined}>
           <span className="activity-dot" aria-hidden="true" />
-          <div><strong>{actionLabel(event.label, event.detail)}</strong>{event.detail && <small>{event.detail}</small>}</div>
+          <div><strong>{t(actionLabel(event.label, event.detail))}</strong>{event.detail && <small>{activityDetail(event, t)}</small>}</div>
         </li>)}
         {active && <li className="activity-running">
           <span className="activity-dot" aria-hidden="true" />
           <div><strong>{progress}</strong>{active.detail && active.label !== "操作查询控件" && <small>{active.detail}</small>}</div>
         </li>}
       </ol>}
-      {running && !plan && !activity.length && !active && <p className="process-note">正在根据你的消息准备回复。</p>}
+      {running && !plan && !activity.length && !active && <p className="process-note">{t("正在根据你的消息准备回复。")}</p>}
       {children}
     </div>
   </details>
@@ -129,6 +143,7 @@ interface Props {
 }
 
 export function RunView({ run, preview, current, live, busy, takeOver, resume, authorize, focus, save, cleanup }: Props) {
+  const { language, t } = useLanguage()
   const [copyStatus, setCopyStatus] = useState("")
   const running = run.status === "running"
   const downloadable = run.download?.state !== "pending" && run.download?.state !== "in_progress"
@@ -152,12 +167,12 @@ export function RunView({ run, preview, current, live, busy, takeOver, resume, a
     }
   }
 
-  return <article className="assistant-message" aria-label={getExtensionName() + " 回复"}>
+  return <article className="assistant-message" aria-label={t("{name} 回复", { name: getExtensionName(language) })}>
     <RunProcess run={run} replying={Boolean(liveReply)}>
       {live && taskPages.length > 0 && <div className="task-pages">
         <details>
-          <summary>任务标签页 · {taskPages.length}</summary>
-          <ul aria-label="本次任务打开的标签页">
+          <summary>{t("任务标签页 · {count}", { count: taskPages.length })}</summary>
+          <ul aria-label={t("本次任务打开的标签页")}>
             {taskPages.map(page => {
               const url = new URL(page.url ?? page.observation?.url ?? page.origin)
               const path = url.pathname === "/" ? "" : url.pathname
@@ -172,43 +187,43 @@ export function RunView({ run, preview, current, live, busy, takeOver, resume, a
             })}
           </ul>
         </details>
-        {!running && <button className="small plain" disabled={waiting} onClick={cleanup}>关闭任务标签页</button>}
+        {!running && <button className="small plain" disabled={waiting} onClick={cleanup}>{t("关闭任务标签页")}</button>}
       </div>}
     </RunProcess>
-    {run.reason && <p className="notice warning">{run.reason}</p>}
+    {run.reason && <p className="notice warning">{t(run.reason)}</p>}
     {(resumable || canTakeOver || (canOpenPage && !reply)) && <div className="actions run-actions">
-      {canTakeOver && <button className="plain small" disabled={busy} onClick={takeOver}>接管网页</button>}
+      {canTakeOver && <button className="plain small" disabled={busy} onClick={takeOver}>{t("接管网页")}</button>}
       {resumable && run.requestedOrigin &&
-        <button className="primary" disabled={busy} onClick={authorize}>授权并继续</button>}
+        <button className="primary" disabled={busy} onClick={authorize}>{t("授权并继续")}</button>}
       {resumable && !run.requestedOrigin &&
-        <button className="primary" disabled={waiting} onClick={resume}>继续任务</button>}
+        <button className="primary" disabled={waiting} onClick={resume}>{t("继续任务")}</button>}
       {canOpenPage && (resumable || !reply) && <button className="secondary" disabled={waiting} onClick={() => focus()}>
-        {run.pageAction ? "打开原页" : "打开当前页"}
+        {t(run.pageAction ? "打开原页" : "打开当前页")}
       </button>}
     </div>}
     {liveReply
       ? <Reply text={liveReply} streaming />
       : reply && <Reply text={reply} />}
     {reply && !running && <div className="reply-actions">
-      <button type="button" className="icon-button copy-reply" aria-label="复制回复" title={copyStatus || "复制回复"} onClick={() => void copy(reply)}>
+      <button type="button" className="icon-button copy-reply" aria-label={t("复制回复")} title={t(copyStatus || "复制回复")} onClick={() => void copy(reply)}>
         <ChatIcon name={copyStatus === "已复制" ? "check" : "copy"} />
       </button>
-      {!file && <button className="plain small" disabled={busy} onClick={save}>保存 Markdown</button>}
+      {!file && <button className="plain small" disabled={busy} onClick={save}>{t("保存 Markdown")}</button>}
       {canOpenPage && !resumable && <button className="plain small" disabled={waiting} onClick={() => focus()}>
-        {run.pageAction ? "打开原页" : "打开当前页"}
+        {t(run.pageAction ? "打开原页" : "打开当前页")}
       </button>}
-      {copyStatus && <small role="status">{copyStatus}</small>}
+      {copyStatus && <small role="status">{t(copyStatus)}</small>}
     </div>}
     {file && <div className="artifact">
       <div className="file-heading"><span className="file-mark" aria-hidden="true">MD</span>
-        <div><strong>Markdown 文件</strong><p className="file-name">
+        <div><strong>{t("Markdown 文件")}</strong><p className="file-name">
           {run.download?.filename?.split(/[\\/]/).pop() || run.report?.filename ||
             replyMarkdown(run.id, run.task, reply).filename}</p></div>
       </div>
       <div className="actions">
-        <button className="secondary" disabled={busy || running || !downloadable} onClick={save}>另存为</button>
+        <button className="secondary" disabled={busy || running || !downloadable} onClick={save}>{t("另存为")}</button>
         {run.download?.state === "complete" && run.download.id !== undefined &&
-          <button className="secondary" onClick={() => chrome.downloads.show(run.download!.id!)}>在文件夹中显示</button>}
+          <button className="secondary" onClick={() => chrome.downloads.show(run.download!.id!)}>{t("在文件夹中显示")}</button>}
       </div>
     </div>}
   </article>

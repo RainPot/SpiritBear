@@ -1,8 +1,13 @@
 import { createRoot } from "react-dom/client"
-import { getExtensionName } from "../../src/extension-name"
+import { readUiLanguage, resolveUiLanguage } from "../../src/i18n"
 import { App } from "./app"
+import { LanguageProvider } from "./language"
 import "./style.css"
 
-document.title = getExtensionName()
 const root = document.getElementById("root")
-if (root) createRoot(root).render(<App />)
+if (root) {
+  const app = createRoot(root)
+  void readUiLanguage().catch(() => resolveUiLanguage()).then(language => {
+    app.render(<LanguageProvider initial={language}><App /></LanguageProvider>)
+  })
+}

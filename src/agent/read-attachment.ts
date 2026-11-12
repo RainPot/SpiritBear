@@ -1,3 +1,4 @@
+import { translate, type UiLanguage } from "../i18n"
 import { maxDocumentBytes, maxDocumentCharacters, maxImageBytes, type ChatAttachment } from "./attachments"
 
 export interface ExtractedText {
@@ -52,7 +53,7 @@ async function readDocument(file: File): Promise<ExtractedText> {
   return { text }
 }
 
-export async function readAttachment(file: File, pasted = false): Promise<ChatAttachment> {
+export async function readAttachment(file: File, pasted = false, language: UiLanguage = "zh-CN"): Promise<ChatAttachment> {
   if (!file.size) throw new Error("文件为空")
   if (file.size > maxDocumentBytes) throw new Error("文件超过 16 MB")
   const header = new Uint8Array(await file.slice(0, 12).arrayBuffer())
@@ -61,7 +62,9 @@ export async function readAttachment(file: File, pasted = false): Promise<ChatAt
   const base = { id: crypto.randomUUID(), bytes: file.size }
   if (type) {
     if (file.size > maxImageBytes) throw new Error("图片超过 8 MB")
-    const name = pasted ? "截图." + type.slice("image/".length).replace("jpeg", "jpg") : filename || "图片"
+    const name = pasted
+      ? translate(language, "截图") + "." + type.slice("image/".length).replace("jpeg", "jpg")
+      : filename || translate(language, "图片")
     return { ...base, name, kind: "image", content: await imageDataUrl(file, type) }
   }
   if (file.type.startsWith("image/")) throw new Error("请使用 PNG、JPEG、GIF 或 WebP 图片")
@@ -69,5 +72,5 @@ export async function readAttachment(file: File, pasted = false): Promise<ChatAt
   const text = result.text.trim()
   if (!text) throw new Error("没有可读正文")
   const truncated = result.truncated || text.length > maxDocumentCharacters
-  return { ...base, name: filename || "本地文件", kind: "document", content: text.slice(0, maxDocumentCharacters), truncated }
+  return { ...base, name: filename || translate(language, "本地文件"), kind: "document", content: text.slice(0, maxDocumentCharacters), truncated }
 }

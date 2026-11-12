@@ -13,14 +13,16 @@ import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
-import { Settings } from "./settings"
+import { LanguageSetting, Settings } from "./settings"
 import { SiteGuides } from "./site-guides"
+import { useLanguage } from "./language"
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败，请重试"
 }
 
 export function App() {
+  const { language, t } = useLanguage()
   const [section, setSection] = useState<"chat" | "settings">("chat")
   const [models, setModels] = useState<Awaited<ReturnType<typeof readModelSettings>>>({ connections: [] })
   const [runs, setRuns] = useState<RunState[]>([])
@@ -185,7 +187,7 @@ export function App() {
       if (currentWindowId === undefined) throw new Error("无法确定当前浏览器窗口")
       const started = await client.request<RunState>({
         kind: "start",
-        input: { ...draft, windowId: currentWindowId, ...selected, startUrl, previousRunId: last?.id },
+        input: { ...draft, windowId: currentWindowId, ...selected, startUrl, uiLanguage: language, previousRunId: last?.id },
       })
       followTail.current = true
       setAwayFromEnd(false)
@@ -256,33 +258,34 @@ export function App() {
 
   return <main className="shell">
     <header className="topbar">
-      <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>{getExtensionName()}</strong></div>
-      <nav className="navigation" aria-label="对话导航">
-        <button disabled={busy || running} onClick={() => switchThread()}>新对话</button>
-        <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>历史</button>
+      <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>{getExtensionName(language)}</strong></div>
+      <nav className="navigation" aria-label={t("对话导航")}>
+        <button disabled={busy || running} onClick={() => switchThread()}>{t("新对话")}</button>
+        <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>{t("历史")}</button>
         <button aria-current={section === "settings" ? "page" : undefined} onClick={() => {
           setSection(section === "settings" ? "chat" : "settings")
           setShowHistory(false)
           setError("")
-        }}>{section === "settings" ? "返回对话" : "设置"}</button>
+        }}>{t(section === "settings" ? "返回对话" : "设置")}</button>
       </nav>
     </header>
-    {showHistory && <section className="history" aria-label="本地对话记录">
+    {showHistory && <section className="history" aria-label={t("本地对话记录")}>
       {threads.size ? <ul>
         {[...threads].map(([id, item]) => <li key={id}>
           <button className="history-item" aria-current={id === threadId ? "page" : undefined}
-            onClick={() => switchThread(id)}><span>{item.task}</span><small>{runLabel(item)}</small></button>
+            onClick={() => switchThread(id)}><span>{item.task}</span><small>{t(runLabel(item))}</small></button>
         </li>)}
-      </ul> : <p className="empty">这里会显示最近的对话。</p>}
+      </ul> : <p className="empty">{t("这里会显示最近的对话。")}</p>}
       {!!threads.size && <button className="plain small" disabled={running || busy}
         onClick={() => withAction(async client => {
           await client.request({ kind: "clear" })
           setRuns([])
           switchThread()
-        })}>清除本地记录</button>}
+        })}>{t("清除本地记录")}</button>}
     </section>}
-    {error && <p className="notice warning top-notice" role="alert">{error}</p>}
+    {error && <p className="notice warning top-notice" role="alert">{t(error)}</p>}
     {section === "settings" ? <div className="settings-body">
+      <LanguageSetting />
       <Settings connections={models.connections} onChanged={async () => setModels(await readModelSettings())} />
       <SiteGuides />
     </div> : <div className="chat-area">
@@ -292,12 +295,12 @@ export function App() {
         setAwayFromEnd(!followTail.current)
       }}>
         {!turns.length && <div className="welcome">
-          <h1>在浏览器里做什么？</h1>
-          <p>提问、读网页或分析文件。用 <strong>@</strong> 引用标签页。</p>
+          <h1>{t("在浏览器里做什么？")}</h1>
+          <p>{t("提问、读网页或分析文件。用 @ 引用标签页。")}</p>
         </div>}
-        {turns.map(run => <section className="turn" key={run.id} aria-label="对话轮次">
+        {turns.map(run => <section className="turn" key={run.id} aria-label={t("对话轮次")}>
           <div className="user-message">
-            {!!run.references?.length && <ul className="sent-references" aria-label="引用的标签页">
+            {!!run.references?.length && <ul className="sent-references" aria-label={t("引用的标签页")}>
               {run.references.map((title, index) => <li key={index}>@ {title}</li>)}
             </ul>}
             <AttachmentList items={run.attachments ?? []} onOpen={id => void openAttachment(run.id, id)} />
@@ -313,8 +316,8 @@ export function App() {
             cleanup={() => withAction(client => client.request({ kind: "cleanup", id: run.id }))} />
         </section>)}
       </div>
-      {awayFromEnd && turns.length > 0 && <button type="button" className="icon-button jump-to-latest" title="跳到最新消息"
-        aria-label="跳到最新消息" onClick={() => {
+      {awayFromEnd && turns.length > 0 && <button type="button" className="icon-button jump-to-latest" title={t("跳到最新消息")}
+        aria-label={t("跳到最新消息")} onClick={() => {
           followTail.current = true
           setAwayFromEnd(false)
           const element = transcript.current

@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { readSiteGuides, removeSiteGuide, saveSiteGuide, siteGuideLimit } from "../../src/agent/site-guides"
+import { useLanguage } from "./language"
 
 export function SiteGuides() {
+  const { t } = useLanguage()
   const [guides, setGuides] = useState<Awaited<ReturnType<typeof readSiteGuides>>>([])
   const [site, setSite] = useState("")
   const [note, setNote] = useState("")
@@ -40,10 +42,10 @@ export function SiteGuides() {
 
   return <section className="settings site-guides" aria-labelledby="site-guides-heading">
     <div className="section-heading">
-      <h2 id="site-guides-heading">站点指引</h2>
-      <p>记下某个站点的搜索入口或筛选步骤。该站点加入任务后，指引会随任务发送给模型。</p>
+      <h2 id="site-guides-heading">{t("站点指引")}</h2>
+      <p>{t("记下某个站点的搜索入口或筛选步骤。该站点加入任务后，指引会随任务发送给模型。")}</p>
     </div>
-    {!!guides.length && <ul className="site-guide-list" aria-label="已保存的站点指引">
+    {!!guides.length && <ul className="site-guide-list" aria-label={t("已保存的站点指引")}>
       {guides.map(guide => {
         const host = new URL(guide.origin).host
         return <li key={guide.origin}>
@@ -53,32 +55,32 @@ export function SiteGuides() {
               setNote(guide.note)
               setStatus(undefined)
             }}>{host}</button>
-          <button type="button" className="plain small" disabled={busy} aria-label={"删除 " + host}
+          <button type="button" className="plain small" disabled={busy} aria-label={t("删除 {name}", { name: host })}
             onClick={() => void change(async () => {
               await removeSiteGuide(guide.origin)
               if (site === guide.origin) {
                 setSite("")
                 setNote("")
               }
-            }, "指引已删除")}>删除</button>
+            }, "指引已删除")}>{t("删除")}</button>
         </li>
       })}
     </ul>}
     <form onSubmit={submit}>
-      <label className="field">站点网址
-        <input value={site} onChange={event => setSite(event.target.value)} placeholder="例如 www.xiaohongshu.com"
+      <label className="field">{t("站点网址")}
+        <input value={site} onChange={event => setSite(event.target.value)} placeholder={t("例如 www.xiaohongshu.com")}
           autoCapitalize="off" spellCheck={false} maxLength={2048} disabled={busy} />
       </label>
-      <label className="field">操作指引
+      <label className="field">{t("操作指引")}
         <textarea value={note} onChange={event => setNote(event.target.value)} rows={3}
-          placeholder="例如先用首页的搜索框，再按最新排序" maxLength={siteGuideLimit} disabled={busy} />
+          placeholder={t("例如先用首页的搜索框，再按最新排序")} maxLength={siteGuideLimit} disabled={busy} />
       </label>
       <div className="actions">
-        <button className="primary" disabled={busy || !site.trim() || !note.trim()}>保存指引</button>
+        <button className="primary" disabled={busy || !site.trim() || !note.trim()}>{t("保存指引")}</button>
       </div>
     </form>
     {status && <p role={status.error ? "alert" : "status"} className={status.error ? "notice warning" : "notice"}>
-      {status.text}
+      {t(status.text)}
     </p>}
   </section>
 }

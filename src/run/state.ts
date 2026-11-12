@@ -2,6 +2,7 @@ import type { SearchSnapshot } from "../browser/search-proof"
 import type { AttachmentSummary, ChatAttachment } from "../agent/attachments"
 import type { ProviderId } from "../agent/provider"
 import type { Artifact, Criteria, Evidence } from "../agent/report"
+import type { UiLanguage } from "../i18n"
 
 export interface PageRef {
   tabId: number
@@ -47,6 +48,7 @@ export interface RunState {
   provider: ProviderId
   model?: string
   pageAction?: PageAction
+  uiLanguage?: UiLanguage
   startUrl?: string
   criteria: Criteria
   fixedCount?: number
@@ -86,6 +88,7 @@ export interface StartInput {
   attachments?: ChatAttachment[]
   currentPage?: PageRef
   pageAction?: PageAction
+  uiLanguage?: UiLanguage
   previousRunId?: string
   startUrl?: string
 }

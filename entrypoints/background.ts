@@ -5,7 +5,8 @@ import { evidenceDraft, replyMarkdown } from "../src/agent/report"
 import { getPage, getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
 import { requiresSearchBox } from "../src/browser/search-proof"
 import { cleanPageUrl, hostPattern, pageOrigin } from "../src/browser/urls"
-import { getExtensionName } from "../src/extension-name"
+import { getExtensionActionTitle, getExtensionName } from "../src/extension-name"
+import { readUiLanguage, resolveUiLanguage, uiLanguageKey, type UiLanguage } from "../src/i18n"
 import { executeStep, toolLabels } from "../src/run/execute"
 import { requestsMarkdown } from "../src/run/intent"
 import { changeRun, clearRuns, createRun, getRun, listRuns } from "../src/run/store"
@@ -152,7 +153,8 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     conversationId: previous ? conversationId(previous) : id,
     references: pages.length ? pages.map(page => page.title) : undefined,
     attachments: attachments.length ? attachments.map(attachmentSummary) : undefined,
-    task, provider: input.provider, model: input.model, pageAction: input.pageAction, startUrl, pages, activePageId,
+    task, provider: input.provider, model: input.model, pageAction: input.pageAction,
+    uiLanguage: resolveUiLanguage(input.uiLanguage), startUrl, pages, activePageId,
     allowedOrigins: [...origins],
     criteria: { sourceCount: fixedCount ?? Math.max(explicitCount, 1), topics: [] },
     fixedCount, evidence: inherited, events: [], tokens: 0, steps: 0,
@@ -354,6 +356,16 @@ async function commandFor(owner: string, command: PanelCommand): Promise<unknown
 }
 
 export default defineBackground(() => {
+  function updateActionTitle(language: UiLanguage) {
+    return chrome.action.setTitle({ title: getExtensionActionTitle(language) }).catch(() => undefined)
+  }
+
+  void readUiLanguage().then(updateActionTitle).catch(() => undefined)
+  chrome.storage.local.onChanged.addListener(changes => {
+    if (changes[uiLanguageKey]) {
+      void updateActionTitle(resolveUiLanguage(changes[uiLanguageKey].newValue))
+    }
+  })
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined)
   chrome.runtime.onConnect.addListener(port => {
     const senderUrl = port.sender?.url?.split(/[?#]/)[0]
