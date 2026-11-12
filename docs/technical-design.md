@@ -47,6 +47,8 @@ flowchart TB
 
 MVP 使用 TypeScript、WXT 和 React。WXT 负责构建 Manifest V3 的侧栏、后台和按需注入脚本。Agent、模型适配、报告生成作为独立 TypeScript 模块，可用模拟模型和网页夹具验证。Chrome 116 作为 API 基线，实际验收记录当时的 Chrome 稳定版版本。 [WXT 入口定义](https://wxt.dev/guide/essentials/entrypoints.html) · [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 
+端点编辑表单在用户点击「拉取模型」后访问同一个 API Base URL 下的 `/models`，读取 `data[].id`。现有会话密钥仅在地址匹配时复用。OpenAI 使用 `/v1/models`，DeepSeek 使用 `/models`。Gemini 的 OpenAI 兼容入口和 Kimi 也提供模型列表，可用对应的兼容端点配置。Claude 提供单独的模型列表参考，接入时按账号的鉴权要求配置。连接时用已选列表里的第一个 ID 测试对话端点的工具调用。端点缺少兼容列表时，可以手填 ID。 [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list) · [DeepSeek](https://api-docs.deepseek.com/api/list-models/) · [Gemini](https://ai.google.dev/gemini-api/docs/openai) · [Kimi](https://platform.kimi.com/docs/api/list-models) · [Claude](https://platform.claude.com/docs/en/api/models/list)
+
 ## 3. 标签页与授权
 
 当前普通窗口的活动 HTTPS 页默认作为参考页，可以在发送前移除。`@` 从同一窗口补充其他标签页。发送时核对 `tabId`、`windowId` 和源。自动参考页已失效时跳过该引用，手动选择的参考页已关闭或跨源跳转时提示重新选择。
@@ -73,7 +75,7 @@ flowchart LR
 
 模型请求包含最新消息、同一对话近期回复、当前页的观察、证据目录和近期工具结果。追问可以复用上一轮的来源。只在一轮工具调用及其回执完整返回后压缩旧上下文，保留原始目标和证据 ID。恢复任务时从运行状态和证据重建请求。
 
-「总结本页」和「翻译本页」把活动标签页登记为单个参考页。Worker 通过现有观察器读取可见正文，模型根据标题和正文生成文本回复。站点指引由用户维护，按 HTTPS 源写入 `chrome.storage.local`。浏览任务只把与当前已授权源匹配的指引加入模型上下文，页面操作继续走同一套权限和回执流程。
+「总结本页」和「翻译本页」把活动标签页登记为单个参考页。Worker 通过现有观察器读取可见正文，模型根据标题和正文生成文本回复。页面操作沿用站点权限和回执流程。
 
 ### 工具契约
 

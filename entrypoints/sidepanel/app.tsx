@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { ChatAttachment } from "../../src/agent/attachments"
+import type { ReasoningEffort } from "../../src/agent/model-options"
 import type { ProviderProfile } from "../../src/agent/provider"
-import { providerForRun, readModelSettings, type ModelChoice } from "../../src/agent/settings"
+import { providerForRun, readModelSettings, saveReasoningEffort, type ModelChoice } from "../../src/agent/settings"
 import { hostPattern, pageOrigin } from "../../src/browser/urls"
 import { getExtensionName } from "../../src/extension-name"
 import { PanelClient } from "../../src/run/client"
@@ -13,22 +14,22 @@ import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
-import { LanguageSetting, ModelParameters, Settings } from "./settings"
-import { SiteGuides } from "./site-guides"
+import { LanguageSetting, Settings } from "./settings"
 import { useLanguage } from "./language"
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败，请重试"
 }
 
+type Section = "chat" | "history" | "settings"
+
 export function App() {
   const { language, t } = useLanguage()
-  const [section, setSection] = useState<"chat" | "settings">("chat")
+  const [section, setSection] = useState<Section>("chat")
   const [models, setModels] = useState<Awaited<ReturnType<typeof readModelSettings>>>({ connections: [] })
   const [runs, setRuns] = useState<RunState[]>([])
   const [session, setSession] = useState<string>()
   const [threadId, setThreadId] = useState<string>()
-  const [showHistory, setShowHistory] = useState(false)
   const [draftVersion, setDraftVersion] = useState(0)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
@@ -91,12 +92,12 @@ export function App() {
 
   useLayoutEffect(() => {
     const element = transcript.current
-    if (element && followTail.current) element.scrollTop = element.scrollHeight
+    if (section === "chat" && element && followTail.current) element.scrollTop = element.scrollHeight
   }, [threadId, section, last?.updatedAt, turns.length, preview])
 
   useEffect(() => {
     const element = transcript.current
-    if (!element) return
+    if (section !== "chat" || !element) return
     const observer = new ResizeObserver(() => {
       if (followTail.current) element.scrollTop = element.scrollHeight
     })
@@ -235,7 +236,6 @@ export function App() {
     setSection("chat")
     setError("")
     setAttachmentPreview(undefined)
-    setShowHistory(false)
     setDraftVersion(version => version + 1)
     followTail.current = true
     setAwayFromEnd(false)
@@ -244,6 +244,19 @@ export function App() {
   function selectModel(value: ModelChoice) {
     setModels(current => ({ ...current, selected: value }))
     void chrome.storage.local.set({ selectedModel: value }).catch(error => setError(message(error)))
+  }
+
+  function openSection(view: Section) {
+    setSection(view)
+    setError("")
+  }
+
+  function selectEffort(choice: ModelChoice, effort?: ReasoningEffort) {
+    withAction(async () => {
+      await saveReasoningEffort(choice.provider, choice.model, effort)
+      const { connections } = await readModelSettings()
+      setModels(current => ({ ...current, connections }))
+    })
   }
 
   async function openAttachment(runId: string, attachmentId: string) {
@@ -261,36 +274,42 @@ export function App() {
       <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>{getExtensionName(language)}</strong></div>
       <nav className="navigation" aria-label={t("对话导航")}>
         <button disabled={busy || running} onClick={() => switchThread()}>{t("新对话")}</button>
-        <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>{t("历史")}</button>
-        <button aria-current={section === "settings" ? "page" : undefined} onClick={() => {
-          setSection(section === "settings" ? "chat" : "settings")
-          setShowHistory(false)
-          setError("")
-        }}>{t(section === "settings" ? "返回对话" : "设置")}</button>
+        <button aria-current={section === "history" ? "page" : undefined}
+          onClick={() => openSection(section === "history" ? "chat" : "history")}>
+          {t(section === "history" ? "返回对话" : "历史")}
+        </button>
+        <button aria-current={section === "settings" ? "page" : undefined}
+          onClick={() => openSection(section === "settings" ? "chat" : "settings")}>
+          {t(section === "settings" ? "返回对话" : "设置")}
+        </button>
       </nav>
     </header>
-    {showHistory && <section className="history" aria-label={t("本地对话记录")}>
-      {threads.size ? <ul>
+    {error && <p className="notice warning top-notice" role="alert">{t(error)}</p>}
+    {section === "history" && <section className="history-page" aria-labelledby="history-heading">
+      <header className="history-heading">
+        <h1 id="history-heading">{t("本地对话记录")}</h1>
+        {!!threads.size && <button className="plain small" disabled={running || busy}
+          onClick={() => withAction(async client => {
+            await client.request({ kind: "clear" })
+            setRuns([])
+            switchThread()
+          })}>{t("清除本地记录")}</button>}
+      </header>
+      {threads.size ? <ul className="history-list">
         {[...threads].map(([id, item]) => <li key={id}>
           <button className="history-item" aria-current={id === threadId ? "page" : undefined}
-            onClick={() => switchThread(id)}><span>{item.task}</span><small>{t(runLabel(item))}</small></button>
+            onClick={() => id === threadId ? openSection("chat") : switchThread(id)}>
+            <span>{item.task}</span><small>{t(runLabel(item))}</small>
+            <ChatIcon name="chevron" size={14} />
+          </button>
         </li>)}
       </ul> : <p className="empty">{t("这里会显示最近的对话。")}</p>}
-      {!!threads.size && <button className="plain small" disabled={running || busy}
-        onClick={() => withAction(async client => {
-          await client.request({ kind: "clear" })
-          setRuns([])
-          switchThread()
-        })}>{t("清除本地记录")}</button>}
     </section>}
-    {error && <p className="notice warning top-notice" role="alert">{t(error)}</p>}
-    {section === "settings" ? <div className="settings-body">
+    {section === "settings" && <div className="settings-body">
       <LanguageSetting />
       <Settings connections={models.connections} onChanged={async () => setModels(await readModelSettings())} />
-      <ModelParameters connections={models.connections} selected={models.selected}
-        onChanged={async () => setModels(await readModelSettings())} />
-      <SiteGuides />
-    </div> : <div className="chat-area">
+    </div>}
+    <div className="chat-area" hidden={section !== "chat"}>
       <div className="transcript" ref={transcript} onScroll={event => {
         const element = event.currentTarget
         followTail.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70
@@ -325,10 +344,10 @@ export function App() {
           const element = transcript.current
           if (element) element.scrollTop = element.scrollHeight
         }}><ChatIcon name="down" /></button>}
-    </div>}
+    </div>
     <Compose key={draftVersion} busy={busy} hidden={section !== "chat"} running={running}
-      connections={models.connections} model={models.selected} onModel={selectModel} previousAttachmentsRunId={lastAttachments?.id}
-      onSettings={() => { setSection("settings"); setShowHistory(false); setError("") }}
+      connections={models.connections} model={models.selected} onModel={selectModel} onEffort={selectEffort} previousAttachmentsRunId={lastAttachments?.id}
+      onSettings={() => openSection("settings")}
       onPause={() => { if (runningRun) pauseRun(runningRun) }} onSend={send} />
     {attachmentPreview && <AttachmentPreview item={attachmentPreview} onClose={() => setAttachmentPreview(undefined)} />}
   </main>

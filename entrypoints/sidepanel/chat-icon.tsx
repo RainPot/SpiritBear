@@ -4,6 +4,7 @@ const paths = {
   down: <path d="M12 5v14m-6-6 6 6 6-6" />,
   stop: <rect x="6.5" y="6.5" width="11" height="11" rx="1.7" fill="currentColor" stroke="none" />,
   chevron: <path d="m9 6 6 6-6 6" />,
+  link: <path d="m10 14 4-4m-6 2-2 2a2.8 2.8 0 0 0 4 4l3-3m-2-6 3-3a2.8 2.8 0 0 1 4 4l-2 2" />,
   copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>,
   check: <path d="m5 12 4 4L19 6" />,
   close: <path d="m7 7 10 10M17 7 7 17" />,

@@ -1,5 +1,5 @@
 import { modelReasoningEffort, type ReasoningEffort } from "./model-options"
-import { completionEndpoint, isBuiltinProvider, isProviderId, modelHostPattern, providerLabels, providers, testProvider, type ProviderId } from "./provider"
+import { completionEndpoint, isBuiltinProvider, isProviderId, listProviderModels, modelHostPattern, providerLabels, providers, testProvider, type ProviderId } from "./provider"
 
 export interface ConnectionProfile {
   id: ProviderId
@@ -33,7 +33,7 @@ function connectionProfile(id: ProviderId, raw: unknown): ConnectionProfile | un
   return { id, label, baseUrl, models }
 }
 
-function keyFor(profile: ConnectionProfile, raw: unknown): string | undefined {
+function keyFor(profile: Pick<ConnectionProfile, "baseUrl">, raw: unknown): string | undefined {
   const saved = raw as { key?: string; endpoint?: string } | undefined
   try {
     if (typeof saved?.key === "string" && saved.endpoint === completionEndpoint(profile.baseUrl).href) return saved.key
@@ -73,17 +73,28 @@ export async function saveReasoningEffort(id: ProviderId, model: string, effort?
   await chrome.storage.local.set({ [key]: effort })
 }
 
-export async function connectProvider(profile: ConnectionProfile, key: string, authorized: Promise<boolean>): Promise<void> {
+type ConnectionEndpoint = Pick<ConnectionProfile, "id" | "baseUrl">
+
+async function connectionCredentials(profile: ConnectionEndpoint, key: string, authorized: Promise<boolean>) {
   if (!await authorized) throw new Error("Chrome 未授权访问模型 API")
   const endpoint = completionEndpoint(profile.baseUrl).href
   const name = providerKey + profile.id
+  const apiKey = key.trim() || keyFor(profile, (await chrome.storage.session.get(name))[name]) || ""
+  if (!apiKey && isBuiltinProvider(profile.id)) throw new Error("请为这个 API 地址输入 API Key")
+  return { endpoint, name, apiKey }
+}
+
+export async function loadModelCatalog(profile: ConnectionEndpoint, key: string, authorized: Promise<boolean>): Promise<string[]> {
+  const { apiKey } = await connectionCredentials(profile, key, authorized)
+  return listProviderModels(profile.baseUrl, apiKey)
+}
+
+export async function connectProvider(profile: ConnectionProfile, key: string, authorized: Promise<boolean>): Promise<void> {
+  const { endpoint, name, apiKey } = await connectionCredentials(profile, key, authorized)
   const model = profile.models[0]
   if (!profile.label.trim() || !model || profile.models.some(value => value.length > 160)) {
     throw new Error("请输入连接名称和有效的模型 ID")
   }
-  const old = (await chrome.storage.session.get(name))[name]
-  const apiKey = key.trim() || keyFor(profile, old) || ""
-  if (!apiKey && isBuiltinProvider(profile.id)) throw new Error("请为这个 API 地址输入 API Key")
   await testProvider({ id: profile.id, baseUrl: profile.baseUrl, model }, apiKey)
   await chrome.storage.local.set({ [name]: profile })
   await chrome.storage.session.set({ [name]: { key: apiKey, endpoint } })

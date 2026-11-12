@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { attachmentBudgetError, maxAttachments, type ChatAttachment } from "../../src/agent/attachments"
+import { reasoningLevels, type ReasoningEffort } from "../../src/agent/model-options"
 import { readAttachment } from "../../src/agent/read-attachment"
 import type { ModelChoice, ModelConnection } from "../../src/agent/settings"
 import { pageOrigin } from "../../src/browser/urls"
@@ -21,6 +22,7 @@ interface Props {
   model?: ModelChoice
   previousAttachmentsRunId?: string
   onModel: (model: ModelChoice) => void
+  onEffort: (model: ModelChoice, effort?: ReasoningEffort) => void
   onSettings: () => void
   onPause: () => void
   onSend: (message: ComposeMessage) => void
@@ -34,9 +36,13 @@ function tabReference(tab: chrome.tabs.Tab): PageRef | undefined {
   return { tabId: tab.id, origin, title: tab.title || new URL(origin).hostname }
 }
 
+const effortLabels: Record<ReasoningEffort, string> = {
+  none: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高",
+}
+
 const modelKey = (choice: ModelChoice) => JSON.stringify([choice.provider, choice.model])
 
-export function Compose({ busy, hidden, running, connections, model, previousAttachmentsRunId, onModel, onSettings, onPause, onSend }: Props) {
+export function Compose({ busy, hidden, running, connections, model, previousAttachmentsRunId, onModel, onEffort, onSettings, onPause, onSend }: Props) {
   const { language, t } = useLanguage()
   const [task, setTask] = useState("")
   const [startUrl, setStartUrl] = useState("")
@@ -66,6 +72,10 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
   const current = activeTab && activeTab.page.tabId !== dismissedTab ? activeTab.page : undefined
   const auto = current && refs.length < 12 && !refs.some(ref => ref.tabId === current.tabId) ? current : undefined
   const available = connections.filter(item => item.connected)
+  const levels = model ? reasoningLevels(model.provider, model.model) : []
+  const reasoning = available.find(item => item.profile.id === model?.provider)?.reasoning
+  const effort = model && reasoning && Object.hasOwn(reasoning, model.model) ? reasoning[model.model] : undefined
+  const deepseek = model?.provider === "deepseek"
   const matches = tabs.filter(tab => !refs.some(ref => ref.tabId === tab.tabId) &&
     (tab.title.toLowerCase().includes(term) || tab.origin.includes(term))).slice(0, 10)
 
@@ -337,7 +347,7 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
             }}>{t(showUrl ? "隐藏网址" : "添加网址")}</button>
           </div>}
         </div>
-        <div className="send-group">
+        <div className={"send-group" + (levels.length ? " has-reasoning" : "")}>
           {model ? <select className="model-picker" aria-label={t("对话模型")} title={model.model} disabled={busy || running}
             value={modelKey(model)} onChange={event => {
               const [provider, model] = JSON.parse(event.target.value) as [ModelChoice["provider"], string]
@@ -347,6 +357,16 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
               {profile.models.map(model => <option key={model} value={modelKey({ provider: profile.id, model })}>{model}</option>)}
             </optgroup>)}
           </select> : <button type="button" className="plain small" disabled={busy} onClick={onSettings}>{t("连接模型")}</button>}
+          {model && levels.length > 0 && <label className="reasoning-picker">
+            <span>{t("思考")}</span>
+            <select aria-label={t("思考强度")} title={t("思考强度")} disabled={busy || running}
+              value={deepseek && effort === "none" ? "" : effort ?? ""}
+              onChange={event => onEffort(model, (event.target.value || undefined) as ReasoningEffort | undefined)}>
+              <option value="">{t(deepseek ? "关闭" : "默认")}</option>
+              {levels.filter(level => !deepseek || level !== "none").map(level =>
+                <option key={level} value={level}>{t(effortLabels[level])}</option>)}
+            </select>
+          </label>}
           {running ? <button type="button" className="send" title={t("暂停当前任务")} aria-label={t("暂停当前任务")} disabled={busy} onClick={onPause}>
             <ChatIcon name="stop" size={19} />
           </button> : <button className="send" type="submit" title={t("发送")} aria-label={t("发送")} disabled={busy || reading || (!task.trim() && !attachments.length)}>

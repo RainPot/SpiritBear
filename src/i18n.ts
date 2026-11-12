@@ -17,7 +17,7 @@ export async function readUiLanguage(): Promise<UiLanguage> {
 // 历史对话保存的是原始状态文案，显示时按当前界面语言格式化。
 const savedMessageFormats: ReadonlyArray<readonly [RegExp, string]> = [
   [/^每条消息最多添加 (?<count>\d+) 个附件$/, "每条消息最多添加 {count} 个附件"],
-  [/^请填写 1 到 (?<count>\d+) 字的操作指引$/, "请填写 1 到 {count} 字的操作指引"],
+  [/^模型列表请求返回 HTTP (?<status>\d+)$/, "模型列表请求返回 HTTP {status}"],
   [/^模型 API 返回 HTTP (?<status>\d+)，请确认所选模型支持图片输入$/, "模型 API 返回 HTTP {status}，请确认所选模型支持图片输入"],
   [/^模型 API 返回 HTTP (?<status>\d+)，请检查模型 ID 与工具调用支持$/, "模型 API 返回 HTTP {status}，请检查模型 ID 与工具调用支持"],
   [/^需要授权访问 (?<origin>https:\/\/\S+)$/, "需要授权访问 {origin}"],

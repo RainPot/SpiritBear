@@ -57,15 +57,13 @@ flowchart LR
 
 输入框默认带上活动的 HTTPS 标签页，发送前可以移除。当前页的标题和站点随引用进入任务。Agent 需要读取未授权站点的正文时，会在该轮对话中请求权限。按 Enter 发送，Shift+Enter 换行。
 
-从输入框切换模型。在「设置 → 模型参数」选择模型，按模型支持的档位设置思考强度。发送后可以看到当前处理状态。展开回答上方的「用时」，查看查找思路、网页操作和来源记录。支持流式输出的模型会逐段显示正文，运行中可以从输入框暂停。追问会带上近期回复和已采集的来源。
+在输入框切换模型，并按当前模型支持的档位调整「思考」强度。发送后可以看到当前处理状态。展开回答上方的「用时」，查看查找思路、网页操作和来源记录。支持流式输出的模型会逐段显示正文，运行中可以从输入框暂停。追问会带上近期回复和已采集的来源。
 
-点击「新对话」开始独立对话，从「历史」可以回到已有记录。结果默认显示在对话中。需要下载时，在指令里写「保存为 Markdown」，或者事后从回复下方点击「保存 Markdown」。
+点击「新对话」开始独立对话，打开「历史」页可查看并继续已有对话。结果默认显示在对话中。需要下载时，在指令里写「保存为 Markdown」，或者事后从回复下方点击「保存 Markdown」。
 
 在输入框点击「附件 → 添加截图或文件」，也可以直接粘贴截图或把文件拖进输入框。支持常见图片、文本、代码、CSV、DOCX、XLSX 和有文字层的 PDF。发送前可以预览或移除。发送时，图片和本地提取的正文会交给当前选择的模型。已发送的附件随对话历史保存在本机，点「复用上次附件」可以带着附件追问。截图需要支持图片输入的模型，例如 DeepSeek `deepseek-flash` 或 OpenAI `gpt-4.1-mini`。
 
-打开普通 HTTPS 网页、清空输入框后，可以点「总结本页」或「翻译本页」。助手读取当前页最多 5,000 字符的可见正文，把摘要或简体中文译文发到对话里。
-
-在「设置 → 站点指引」可以保存某个站点的搜索入口、筛选步骤等经验。例如，为 `www.xiaohongshu.com` 保存「从首页搜索框输入关键词，按最新排序」。对应站点进入授权范围后，指引会随浏览任务发给模型。
+打开普通 HTTPS 网页、清空输入框后，可以点「总结本页」或「翻译本页」。助手读取当前页最多 5,000 字符的可见正文，用所选界面语言生成摘要或译文。
 
 ## 首版能力
 
@@ -75,9 +73,8 @@ flowchart LR
 | 任务标签组 | 让 Agent 在专用标签页里导航、输入搜索词、筛选、滚动和阅读。 |
 | 进度与接管 | 查看操作进度、暂停并切到当前页、继续任务或关闭该任务打开的标签页。 |
 | 网页快捷操作 | 总结或翻译当前页可见正文，在对话里查看。 |
-| 站点指引 | 按站点保存自己的搜索和筛选经验，下次浏览该站点时供模型参考。 |
 | 带来源的 Markdown | 在侧栏预览按主题整理的内容，打开原文核对，在本地找到文件。 |
-| 自选模型 | 连接 OpenAI、DeepSeek 或自定义兼容端点。可以配置多个模型 ID，在输入框切换。 |
+| 自选模型 | 连接 OpenAI、DeepSeek 或自定义兼容端点。可拉取端点的模型列表，也能手填多个模型 ID，在输入框切换。 |
 
 首版只需安装 Chrome 扩展，可以使用当前 Chrome 会话访问已授权的页面。资料整理任务在侧栏打开时运行，关闭侧栏会暂停后续操作。文件和任务记录保存在本机。使用远程模型时，任务描述和整理所需的页面片段会发送给你配置的服务商。
 
@@ -91,11 +88,11 @@ npm run build
 ```
 
 1. 在 Chrome 打开 `chrome://extensions`，打开「开发者模式」，点「加载已解压的扩展程序」，选择构建输出 `.output/chrome-mv3`。
-2. 点击工具栏的熊灵图标打开侧栏。英文 Chrome 中的名称是 Spirit Bear。在「设置」里连接 OpenAI、DeepSeek 或自定义端点，填写 API 地址、密钥和模型 ID，再点「连接并测试」。模型 ID 每行一个，自定义本机兼容端点支持 HTTP。
+2. 点击工具栏的熊灵图标打开侧栏。英文 Chrome 中的名称是 Spirit Bear。在「设置」里连接 OpenAI、DeepSeek 或自定义端点，填写 API 地址和密钥。点击「拉取模型」后从下拉框添加模型 ID，也可以每行手填一个，再点「连接并测试」。自定义本机兼容端点支持 HTTP。
 3. 回到对话，在输入框选择模型。直接提问，或打开目标网页后交给 Agent 一个任务。当前页自动附上，也可以用 `@` 添加其他页面。
 4. 在对应的助手消息中查看结果。明确要求保存时，Chrome 会尝试将完整结果下载到默认位置下的 `熊灵/` 或 `Spirit Bear/`，文件夹名称跟随 Chrome 语言。
 
-API Key 仅保存在当前 Chrome 会话。任务需要登录或验证码时，打开任务页手动处理，再回侧栏点击「继续任务」。
+模型连接里的厂商标识来自 [OpenAI 开发者站点](https://developers.openai.com/) 和 [DeepSeek API 文档](https://api-docs.deepseek.com/)。API Key 仅保存在当前 Chrome 会话。任务需要登录或验证码时，打开任务页手动处理，再回侧栏点击「继续任务」。
 
 ## 开发
 
@@ -105,7 +102,7 @@ API Key 仅保存在当前 Chrome 会话。任务需要登录或验证码时，�
 
 ## 参考项目
 
-- **Kaze** 的侧栏、任务标签组、页面翻译和站点技能启发了浏览交互。**DeepSeek** 的聊天和历史记录启发了对话布局。[Kaze 官网](https://kaze.build/) · [Kaze 项目说明](https://github.com/jackwener/Kaze#readme) · [DeepSeek](https://www.deepseek.com/en/download/)
+- **Kaze** 的侧栏、任务标签组和页面翻译启发了浏览交互。**DeepSeek** 的聊天和历史记录启发了对话布局。[Kaze 官网](https://kaze.build/) · [Kaze 项目说明](https://github.com/jackwener/Kaze#readme) · [DeepSeek](https://www.deepseek.com/en/download/)
 - **Codex** 的对话轮次、任务进度和暂停入口用于参考侧栏的工作流程。[Codex App Server](https://learn.chatgpt.com/docs/app-server) · [长任务交互](https://learn.chatgpt.com/docs/long-running-work)
 - **Browser Use** 的 README 用任务演示展示 Agent 实际做了什么，再给出入口。[Browser Use README](https://github.com/browser-use/browser-use#readme)
 - **Nanobrowser** 展示了 Chrome 扩展与自备模型的组合，README 给出了模型配置和首条任务的路径。[Nanobrowser README](https://github.com/nanobrowser/nanobrowser#readme)
