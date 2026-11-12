@@ -4,6 +4,7 @@ import { dirname, join } from "node:path"
 import { defineConfig } from "wxt"
 
 const require = createRequire(import.meta.url)
+const icons = { 16: "icon/16.png", 24: "icon/24.png", 32: "icon/32.png", 48: "icon/48.png", 128: "icon/128.png" }
 
 export default defineConfig({
   hooks: {
@@ -15,8 +16,8 @@ export default defineConfig({
   manifest: {
     name: "TabErrand",
     minimum_chrome_version: "116",
-    action: { default_title: "打开 TabErrand" },
-    icons: { 16: "icon/16.png", 32: "icon/32.png", 48: "icon/48.png", 128: "icon/128.png" },
+    action: { default_title: "打开 TabErrand", default_icon: icons },
+    icons,
     permissions: ["sidePanel", "tabs", "tabGroups", "scripting", "storage", "downloads"],
     optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
     incognito: "not_allowed",

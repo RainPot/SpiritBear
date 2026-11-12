@@ -255,7 +255,7 @@ export function App() {
 
   return <main className="shell">
     <header className="topbar">
-      <div className="brand"><span className="mark" aria-hidden="true" /><strong>TabErrand</strong></div>
+      <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>TabErrand</strong></div>
       <nav className="navigation" aria-label="对话导航">
         <button disabled={busy || running} onClick={() => switchThread()}>新对话</button>
         <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>历史</button>

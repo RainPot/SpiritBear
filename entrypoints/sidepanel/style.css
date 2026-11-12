@@ -19,7 +19,6 @@
   --accent-hover: #1a54ac;
   --send-ink: #ffffff;
   --green: #1a7f37;
-  --green-surface: #eaf6ee;
   --warning: #754510;
   --warning-surface: #fff4df;
   --gutter: clamp(15px, 4.5vw, 26px);
@@ -43,11 +42,8 @@ p, h1, h2 { margin: 0; }
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
   gap: 5px 9px; min-height: 54px; padding: 8px var(--gutter); border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 7px; font-size: 16px; letter-spacing: -.025em; white-space: nowrap; }
-.mark { width: 25px; height: 25px; position: relative; background: var(--green-surface); border-radius: 7px; flex: none; }
-.mark::before, .mark::after { content: ""; position: absolute; width: 9px; height: 5px; border: 1.5px solid var(--green); border-radius: 2px; }
-.mark::before { left: 5px; top: 6px; }
-.mark::after { left: 9px; top: 11px; background: var(--green-surface); }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 16px; letter-spacing: -.025em; white-space: nowrap; }
+.brand-logo { display: block; flex: none; }
 .navigation { display: flex; gap: 2px; }
 .navigation button, .segmented button {
   border: 0; background: transparent; border-radius: 7px; padding: 6px 6px;

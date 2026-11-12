@@ -1,5 +1,7 @@
 # TabErrand
 
+<img src="public/icon/128.png" width="56" height="56" alt="TabErrand 标志">
+
 在 Chrome 侧栏里用自己的模型对话。TabErrand 可以分析截图和本地文件、阅读当前网页、搜索资料和整理来源，需要时把结果保存成 Markdown。
 
 > TabErrand v0.2.0 可在本地加载。下图是对话侧栏的运行画面，使用受控网页的示例数据。
