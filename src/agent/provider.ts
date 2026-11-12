@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { readCompletionStream, visibleAssistantText } from "./completion-stream"
+import { modelReasoningEffort, type ReasoningEffort } from "./model-options"
 import type { ToolDefinition } from "./contracts"
 
 export type BuiltinProviderId = "openai" | "deepseek"
@@ -9,6 +10,7 @@ export interface ProviderProfile {
   id: ProviderId
   baseUrl: string
   model: string
+  reasoningEffort?: ReasoningEffort
 }
 
 export const providers: Record<BuiltinProviderId, ProviderProfile> = {
@@ -62,19 +64,21 @@ export type UserContent = string | (
 export type ChatMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: UserContent }
-  | { role: "assistant"; content: string | null; tool_calls?: ModelToolCall[] }
+  | { role: "assistant"; content: string | null; reasoning_content?: string; tool_calls?: ModelToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string }
 
 export interface Completion {
   content: string | null
   tool_calls: ModelToolCall[]
   tokens?: number
+  reasoningContent?: string
 }
 
 const responseSchema = z.object({
   choices: z.tuple([z.object({
     message: z.object({
       content: z.string().nullable().optional(),
+      reasoning_content: z.string().max(2_000_000).nullish(),
       tool_calls: z.array(toolCallSchema).max(20).nullish(),
     }),
   })], z.unknown()),
@@ -87,6 +91,11 @@ interface CompletionOptions {
   namedTool?: string
 }
 
+export function usesDeepSeekThinking(profile: ProviderProfile): boolean {
+  const effort = modelReasoningEffort(profile.id, profile.model, profile.reasoningEffort)
+  return profile.id === "deepseek" && effort !== undefined && effort !== "none"
+}
+
 export async function completeChat(
   profile: ProviderProfile,
   apiKey: string,
@@ -95,7 +104,10 @@ export async function completeChat(
   { signal, onText, namedTool }: CompletionOptions = {},
 ): Promise<Completion> {
   const endpoint = completionEndpoint(profile.baseUrl)
-  const deadline = AbortSignal.timeout(55_000)
+  const effort = modelReasoningEffort(profile.id, profile.model, profile.reasoningEffort)
+  const thinking = usesDeepSeekThinking(profile)
+  const retainReasoning = thinking && tools.length > 0
+  const deadline = AbortSignal.timeout(effort && effort !== "none" ? 180_000 : 55_000)
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
   const stream = Boolean(onText) && isBuiltinProvider(profile.id)
   let response: Response
@@ -113,7 +125,8 @@ export async function completeChat(
         ...(tools.length ? { tools } : {}),
         stream,
         ...(stream && endpoint.hostname === "api.openai.com" ? { stream_options: { include_usage: true } } : {}),
-        ...(profile.id === "deepseek" ? { thinking: { type: "disabled" } } : {}),
+        ...(profile.id === "deepseek" ? { thinking: { type: thinking ? "enabled" : "disabled" } } : {}),
+        ...(effort !== undefined ? { reasoning_effort: effort } : {}),
         ...(namedTool ? { tool_choice: { type: "function", function: { name: namedTool } } } : {}),
       }),
     })
@@ -136,7 +149,7 @@ export async function completeChat(
   const streaming = response.headers.get("content-type")?.includes("text/event-stream")
   try {
     data = streaming && response.body
-      ? await readCompletionStream(response.body, onText)
+      ? await readCompletionStream(response.body, onText, retainReasoning)
       : await response.json()
   } catch (error) {
     if (signal?.aborted) throw error
@@ -148,7 +161,11 @@ export async function completeChat(
   const message = parsed.data.choices[0].message
   const calls = message.tool_calls ?? []
   if (new Set(calls.map(call => call.id)).size !== calls.length) throw new Error("模型返回了重复的工具调用 ID")
-  return { content: message.content == null ? null : visibleAssistantText(message.content), tool_calls: calls, tokens: parsed.data.usage?.total_tokens }
+  return {
+    content: message.content == null ? null : visibleAssistantText(message.content),
+    tool_calls: calls, tokens: parsed.data.usage?.total_tokens,
+    reasoningContent: retainReasoning ? message.reasoning_content ?? undefined : undefined,
+  }
 }
 
 export async function testProvider(profile: ProviderProfile, apiKey: string, signal?: AbortSignal): Promise<void> {

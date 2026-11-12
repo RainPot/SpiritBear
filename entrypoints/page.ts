@@ -8,9 +8,10 @@ type Snapshot = { id: string; url: string; targets: Map<string, Target> }
 const query = /search|query|keyword|搜索|查找|检索|关键词|搜一搜|^搜$/i
 const filter = /filter|sort|recent|latest|category|筛选|排序|综合|最新|最近|最热|类型|不限|全部|图文|视频|仅看/i
 const filterLabel = /^(?:综合|最新|最近|最热|不限|全部|图文|视频|综合排序|最新发布|最多点赞|最多收藏|全部类型|筛选|排序|filter|sort|latest|recent|all)$/i
-const mutation = /发布|发送|提交|删除|移除|确认|购买|支付|退出|点赞|收藏|关注|remove|delete|publish|send|confirm|purchase|unsubscribe/i
+const mutation = /发布|发送|提交|删除|移除|确认|购买|支付|退出|点赞|收藏|关注|充值|退款|创建|新建|保存|编辑|关闭账户|remove|delete|publish|send|confirm|purchase|unsubscribe|top\s*up|recharge|refund|create|save|edit|sign out|log out/i
+const readNavigation = /概览|首页|控制台|开放平台|用量|账单|余额|费用|消费记录|订单|收支明细|\b(?:overview|home|dashboard|console|usage|billing|balance|orders|transactions|invoices)\b/i
 const sensitive = /password|phone|email|token|captcha|verification|手机号|邮箱|密码|验证码|支付|登录|注册/i
-const actionable = 'input, textarea, select, button, [role="button"], [role="tab"], [role="searchbox"], [role="radio"], [role="checkbox"]'
+const actionable = 'input, textarea, select, button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="searchbox"], [role="radio"], [role="checkbox"]'
 const searchScope = 'search, [role="search"], form[method="get" i], [aria-label*="搜索"], [aria-label*="筛选"]'
 const observerMarker = "__taberrandObserver"
 
@@ -38,7 +39,7 @@ function targetKind(element: HTMLElement): TargetKind | undefined {
   if (element.matches(":disabled, [aria-disabled='true']")) return
   const text = label(element)
   const identifiers = [text, element.id, element.getAttribute("name") ?? ""].join(" ")
-  if (sensitive.test(identifiers)) return
+  if (sensitive.test(identifiers) && !/\btoken.{0,12}(?:usage|用量)/i.test(identifiers)) return
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     const searchInput = element instanceof HTMLTextAreaElement || ["text", "search"].includes(element.type)
     if (searchInput && (element.getAttribute("role") === "searchbox" || element.matches("input[type=search]") ||
@@ -54,6 +55,9 @@ function targetKind(element: HTMLElement): TargetKind | undefined {
     const action = element.hasAttribute("formaction") ? element.formAction : form.action
     if (method.toLowerCase() !== "get" || pageOrigin(action) !== location.origin) return
   }
+  if (!mutation.test(identifiers) && readNavigation.test(text) &&
+      element.matches('button, [role="tab"], [role="menuitem"], [role="link"], [role="button"]') &&
+      (element.matches('[role="tab"], [role="link"]') || element.closest('nav, aside, [role="navigation"], [role="menu"]'))) return "click"
   if (element.matches('button, input[type="button"], [role="button"], [role="tab"], [role="radio"], [role="checkbox"]') &&
       (filterLabel.test(text) || (!mutation.test(identifiers) && element.closest(searchScope) &&
         (filter.test(identifiers) || query.test(identifiers))))) return "click"
@@ -73,6 +77,11 @@ function pageBlocker(): Observation["blocked"] {
     if (/验证码|人机验证|安全验证|verify you are human|captcha/i.test(text)) return "challenge"
     if (/扫码登录|登录后|手机号登录|sign in|log in/i.test(text)) return "login"
   }
+
+  const heading = compact([...document.querySelectorAll<HTMLElement>('h1, h2, [role="heading"]')]
+    .filter(visible).slice(0, 4).map(element => element.innerText).join(" "))
+  const credentialInputs = [...document.querySelectorAll<HTMLElement>('input[type="password"], input[autocomplete="one-time-code"]')]
+  if (credentialInputs.some(visible) && /登录|登錄|sign in|log in/i.test(heading + " " + document.title)) return "login"
 
   const content = compact(document.body?.innerText ?? "")
   if (content.length < 1600) {
@@ -112,7 +121,7 @@ function observe(): { observation: Observation; snapshot: Snapshot } {
     snapshot.targets.set(elementId, { element, kind })
     if (kind === "link") {
       linkUrls.add((element as HTMLAnchorElement).href)
-      observation.links.push({ elementId, label: redactText(text) })
+      observation.links.push({ elementId, label: redactText(text), origin: pageOrigin((element as HTMLAnchorElement).href) })
     } else {
       const options = element instanceof HTMLSelectElement ? Array.from(element.options)
         .filter(option => !option.disabled).slice(0, 25)

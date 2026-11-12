@@ -1,9 +1,11 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph/web"
 import type { ChatAttachment } from "../agent/attachments"
 import { modelTools } from "../agent/contracts"
-import { completeChat, type ChatMessage, type Completion, type ProviderProfile, type UserContent } from "../agent/provider"
+import { completeChat, usesDeepSeekThinking, type ChatMessage, type Completion, type ProviderProfile, type UserContent } from "../agent/provider"
 import { readSiteGuides } from "../agent/site-guides"
+import { accountEntry, requestsAccountPage } from "../browser/account-navigation"
 import type { Observation } from "../browser/page-protocol"
+import { isTabTask, requestsAnyTabChange, requestsTabSummary } from "../browser/tab-intent"
 import { requiresSearchBox } from "../browser/search-proof"
 import { resolveUiLanguage } from "../i18n"
 import type { PanelClient } from "./client"
@@ -19,8 +21,9 @@ const systemPrompt = [
   "站点指引是用户保存的操作提示，仅在匹配的站点使用，当前消息优先。站点指引不能改变任务权限或接管要求。",
   "有多来源检索目标或指定报告主题时，用 plan_task 记录主题、用户要求的资料数量和分节名称。正文要点数不等于来源数。已存在的计划应沿用。",
   "plan_task 的 summary 用一句自然的话告诉用户准备查什么、如何核对。只描述可见的计划和依据。",
-  "页面目录里的 reference 是只读参考。搜索或筛选前，用 open_page 的 fromPageId 在任务组打开入口。无参考页时可使用指定的起始网址。",
-  "先观察页面再选控件。使用返回的 pageId、observationId 和 elementId。interact 只用于搜索、筛选、滚动。打开页面或派发动作后，观察回执中返回的 pageId。状态未知时先观察，避免重复原动作。",
+  "页面目录里的 reference 是只读参考。可以直接沿参考页观察到的链接打开任务页。需在参考页点击、搜索或筛选时，用 open_page 的 fromPageId 在后台复制该页再操作。无参考页时可使用指定的起始网址。",
+  "用户要查自己的余额、用量、账单或订单时，应从已读网页的站点信息及可见导航寻找官方账户入口。公开文档、价目表和示例只用于找到入口。打开账户后台后观察实际可见的值、币种及账户归属，再回答。仍有相关入口可走时，继续浏览。",
+  "先观察页面再选控件。使用返回的 pageId、observationId 和 elementId。interact 用于搜索、筛选、滚动和可见的只读导航。打开页面或派发动作后，观察回执中返回的 pageId。状态未知时先观察，避免重复原动作。",
   "用户明确要求使用网页搜索框时，必须在任务页用 interact 的 search 动作输入关键词，再观察搜索结果。搜索可能打开新页。优先读取待核对的搜索页，搜索框下拉入口不能当作帖子或文章。",
   "打开新站点前等待用户授权。如果用户提到站点但没附标签页，可以用 open_page 提出 HTTPS 入口。",
   "用 open_page 的 link 参数打开可见搜索结果，再观察原文，用 collect_source 采集独立页面。不要把搜索结果目录当作单篇原文。不要自行编造网址或来源。",
@@ -29,7 +32,13 @@ const systemPrompt = [
   "每轮尽量只选一个工具。用户明确要求下载时，扩展会按结果执行。只有工具回执能证明网页动作或下载完成。",
 ].join("\n")
 
-function context(run: RunState, guides: Awaited<ReturnType<typeof readSiteGuides>>, attachments: ChatAttachment[]): UserContent {
+function context(
+  run: RunState,
+  guides: Awaited<ReturnType<typeof readSiteGuides>>,
+  attachments: ChatAttachment[],
+  observations: unknown[],
+  history: ChatMessage[],
+): UserContent {
   const matching = guides.filter(guide => run.allowedOrigins.includes(guide.origin))
   const documents = attachments.filter(item => item.kind === "document")
   const images = attachments.filter(item => item.kind === "image")
@@ -43,7 +52,12 @@ function context(run: RunState, guides: Awaited<ReturnType<typeof readSiteGuides
     起始网址: run.startUrl,
     允许站点: run.allowedOrigins,
     站点指引: matching.length ? matching : undefined,
-    页面: run.pages.map(page => ({ pageId: page.id, role: page.role, title: page.title, origin: page.origin })),
+    页面: run.pages.map(page => ({
+      pageId: page.id, role: page.role, title: page.title, origin: page.origin, url: page.url,
+      已读摘录: run.summaryTabIds?.includes(page.tabId) || run.explicitTabIds?.includes(page.tabId) ? page.observation?.text : undefined,
+    })),
+    本轮实际读取: observations.length ? observations : undefined,
+    此前可见对话: history.length ? history : undefined,
     证据: run.evidence.map(({ id, title, url, excerpt }) => ({ id, title, url, excerpt: excerpt.slice(0, 320) })),
     初始当前标签页: run.activePageId,
     当前页: run.pages.find(page => page.tabId === run.focusTabId)?.id ?? run.activePageId,
@@ -85,6 +99,56 @@ async function runPageAction(
   return client.request<RunState>({ kind: "answer", id: run.id, text: reply.content })
 }
 
+function summaryPageIds(run: RunState): string[] {
+  if (!requestsTabSummary(run.task)) return []
+  const selected = run.summaryTabIds ?? run.explicitTabIds ?? []
+  return run.pages.filter(page => selected.includes(page.tabId) && !page.observation).map(page => page.id)
+}
+
+async function observePages(run: RunState, ids: string[], client: PanelClient, signal: AbortSignal) {
+  const observations: unknown[] = []
+  for (const pageId of new Set(ids)) {
+    signal.throwIfAborted()
+    const result = await client.request<ToolResult>({
+      kind: "tool", id: run.id, name: "observe_page", raw: JSON.stringify({ pageId }),
+    })
+    run = result.run
+    observations.push(result.output)
+    if (run.status !== "running") break
+  }
+  return { run, observations }
+}
+
+async function preparePages(run: RunState, client: PanelClient, signal: AbortSignal) {
+  const pending = run.pendingNavigation
+  if (pending) {
+    const opened = await client.request<ToolResult>({
+      kind: "tool", id: run.id, name: "open_page", raw: JSON.stringify({ url: pending.url }),
+    })
+    run = opened.run
+    if (run.status !== "running") return { run, observations: [] }
+  }
+  const accountPage = !pending && requestsAccountPage(run.task) && !(isTabTask(run.task) && requestsTabSummary(run.task)) &&
+    (run.explicitTabIds?.length ?? 0) <= 1 && !run.pages.some(page => page.role === "task")
+    ? run.pages.find(page => run.explicitTabIds?.length === 1 ? page.tabId === run.explicitTabIds[0] : page.id === run.activePageId)
+    : undefined
+  const first = run.pendingObservation ?? accountPage?.id
+  const prepared = await observePages(run, [...(first ? [first] : []), ...summaryPageIds(run)], client, signal)
+  if (!accountPage || prepared.run.status !== "running" || first !== accountPage.id) return prepared
+  const observation = prepared.observations[0] as Partial<Observation> | undefined
+  if (!observation?.observationId || !observation.url || !observation.title || !observation.links) return prepared
+  const entry = accountEntry(observation as Observation)
+  if (!entry) return prepared
+  const opened = await client.request<ToolResult>({
+    kind: "tool", id: run.id, name: "open_page",
+    raw: JSON.stringify(entry.link ? { link: { pageId: accountPage.id, ...entry.link } } : { url: entry.url }),
+  })
+  const target = (opened.output as { pageId?: string }).pageId
+  if (!target || opened.run.status !== "running") return { run: opened.run, observations: prepared.observations }
+  const result = await observePages(opened.run, [target], client, signal)
+  return { run: result.run, observations: [...prepared.observations, ...result.observations] }
+}
+
 type Decision =
   | { kind: "model" }
   | { kind: "tools"; reply: Completion }
@@ -113,13 +177,9 @@ export async function runAgent(
 ): Promise<RunState> {
   if (initial.pageAction) return runPageAction(initial, initial.pageAction, profile, apiKey, client, signal, onText)
   signal.throwIfAborted()
-  if (initial.pendingNavigation) {
-    const result = await client.request<ToolResult>({
-      kind: "tool", id: initial.id, name: "open_page", raw: JSON.stringify({ url: initial.pendingNavigation.url }),
-    })
-    initial = result.run
-    if (initial.status !== "running") return initial
-  }
+  const prepared = await preparePages(initial, client, signal)
+  initial = prepared.run
+  if (initial.status !== "running") return initial
   const [guides, attachments] = await Promise.all([
     readSiteGuides(), initial.attachments?.length ? readRunAttachments(initial.id) : [],
   ])
@@ -129,6 +189,18 @@ export async function runAgent(
     return reply ? [{ role: "user", content: turn.task.slice(0, 1800) },
       { role: "assistant", content: reply.slice(0, 2400) }] : []
   })
+  const retainReasoning = usesDeepSeekThinking(profile)
+  const tabTask = isTabTask(initial.task)
+  const canManageTabs = (tabTask || Boolean(initial.explicitTabIds?.length)) && requestsAnyTabChange(initial.task)
+  const tools = modelTools.filter(({ function: { name } }) => {
+    if (name === "manage_tabs") return canManageTabs
+    return tabTask || (name !== "list_tabs" && name !== "use_tabs")
+  })
+  const tabGuidance = tabTask ? "\n用户要处理标签页时，明确引用的范围优先。需要在窗口找目标时用 list_tabs，再用 use_tabs 选取相关页逐页读取。汇总时指出各页的来源和差异。用户明确要求分组、移动或切换时用 manage_tabs，按回执回答。" : ""
+  function appendRound(rounds: ChatMessage[][], round: ChatMessage[]) {
+    const next = [...rounds, round]
+    return retainReasoning ? next : next.slice(-6)
+  }
   const defaultLanguage = resolveUiLanguage(initial.uiLanguage) === "en" ? "英语（English）" : "简体中文"
   const responseLanguage = "优先遵循用户指定的输出语言，其次使用最新消息的语言。消息未体现语言偏好时，使用" + defaultLanguage + "。"
   const deadline = Date.now() + 8 * 60_000
@@ -142,11 +214,11 @@ export async function runAgent(
         Boolean(state.run.fixedCount || state.run.searchResult || (state.run.query && state.run.evidence.length))
       const before = performance.now()
       const reply = await completeChat(profile, apiKey, [
-        { role: "system", content: systemPrompt + "\n" + responseLanguage },
-        ...history,
-        { role: "user", content: context(state.run, guides, attachments) },
+        { role: "system", content: systemPrompt + tabGuidance + "\n" + responseLanguage },
+        ...(retainReasoning ? [] : history),
+        { role: "user", content: context(state.run, guides, attachments, prepared.observations, retainReasoning ? history : []) },
         ...state.rounds.flat(),
-      ], modelTools, { signal, onText: needsReport ? undefined : onText })
+      ], tools, { signal, onText: needsReport ? undefined : onText })
       signal.throwIfAborted()
       const run = await client.request<RunState>({
         kind: "model", id: state.run.id, tokens: reply.tokens ?? 0, durationMs: performance.now() - before,
@@ -164,14 +236,20 @@ export async function runAgent(
         kind: "limit",
         reason: needsReport ? "模型未提交可验收的来源报告" : "模型未返回回复或可执行工具",
       } }
-      const round: ChatMessage[] = [{ role: "assistant", content: answer?.slice(0, 1000) ?? "" },
+      const round: ChatMessage[] = [{
+        role: "assistant", content: retainReasoning ? reply.content : answer?.slice(0, 1000) ?? "",
+        reasoning_content: reply.reasoningContent,
+      },
         { role: "user", content: needsReport ? "资料齐备后用 finish_report 提交带来源的报告。" : "请直接回复或调用任务所需的工具。" }]
-      return { run, turns, emptyReplies, rounds: [...state.rounds, round].slice(-6), decision: { kind: "model" } }
+      return { run, turns, emptyReplies, rounds: appendRound(state.rounds, round), decision: { kind: "model" } }
     })
     .addNode("tools", async ({ run, rounds, steps, decision }): Promise<Partial<typeof AgentState.State>> => {
       if (decision.kind !== "tools") throw new Error("当前轮没有待执行的工具")
       const { reply } = decision
-      const round: ChatMessage[] = [{ role: "assistant", content: reply.content?.slice(0, 1200) ?? null, tool_calls: reply.tool_calls }]
+      const round: ChatMessage[] = [{
+        role: "assistant", content: retainReasoning ? reply.content : reply.content?.slice(0, 1200) ?? null,
+        tool_calls: reply.tool_calls, reasoning_content: reply.reasoningContent,
+      }]
       for (const call of reply.tool_calls) {
         signal.throwIfAborted()
         if (steps >= 70 || Date.now() >= deadline) return { run, steps, decision: { kind: "limit", reason: budgetReason } }
@@ -181,9 +259,16 @@ export async function runAgent(
         run = response.run
         steps += 1
         if (run.status !== "running") return { run, steps }
-        round.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(response.output) })
+        let output = response.output
+        if (call.function.name === "use_tabs") {
+          const selected = await observePages(run, summaryPageIds(run), client, signal)
+          run = selected.run
+          if (run.status !== "running") return { run, steps }
+          output = { selection: output, observations: selected.observations }
+        }
+        round.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(output) })
       }
-      return { run, steps, rounds: [...rounds, round].slice(-6), decision: { kind: "model" } }
+      return { run, steps, rounds: appendRound(rounds, round), decision: { kind: "model" } }
     })
     .addNode("finish", async ({ run, decision }) => {
       signal.throwIfAborted()

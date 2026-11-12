@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react"
+import { reasoningLevels, type ReasoningEffort } from "../../src/agent/model-options"
 import { isBuiltinProvider, modelHostPattern } from "../../src/agent/provider"
-import { connectProvider, disconnectProvider, type ModelConnection } from "../../src/agent/settings"
+import { connectProvider, disconnectProvider, saveReasoningEffort, type ModelChoice, type ModelConnection } from "../../src/agent/settings"
 import { uiLanguageKey, type UiLanguage } from "../../src/i18n"
 import { useLanguage } from "./language"
 
@@ -28,6 +29,76 @@ export function LanguageSetting() {
       </div>
     </div>
     {error && <p className="notice warning" role="alert">{t("语言设置保存失败，请重试")}</p>}
+  </section>
+}
+
+const effortLabels: Record<ReasoningEffort, string> = {
+  none: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高",
+}
+
+const optionKey = (provider: ModelChoice["provider"], model: string) => JSON.stringify([provider, model])
+
+export function ModelParameters({ connections, selected, onChanged }: {
+  connections: ModelConnection[]
+  selected?: ModelChoice
+  onChanged: () => Promise<void>
+}) {
+  const { t } = useLanguage()
+  const [choice, setChoice] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [feedback, setFeedback] = useState("")
+  const options = connections.flatMap(connection => connection.profile.models.map(model => ({
+    connection, model, key: optionKey(connection.profile.id, model),
+  })))
+  const preferred = selected ? optionKey(selected.provider, selected.model) : undefined
+  const option = options.find(item => item.key === (choice || preferred)) ??
+    options.find(item => reasoningLevels(item.connection.profile.id, item.model).length) ?? options[0]
+  if (!option) return null
+
+  const { connection, model } = option
+  const provider = connection.profile.id
+  const levels = reasoningLevels(provider, model)
+  const deepseek = provider === "deepseek"
+  const saved = connection.reasoning
+  const effort = saved && Object.hasOwn(saved, model) ? saved[model] : undefined
+
+  async function save(value: string) {
+    setBusy(true)
+    setFeedback("")
+    try {
+      await saveReasoningEffort(provider, model, value ? value as ReasoningEffort : undefined)
+      await onChanged()
+      setFeedback("模型参数已保存")
+    } catch {
+      setFeedback("模型参数保存失败")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="settings" aria-labelledby="model-parameters-heading">
+    <div className="section-heading">
+      <h2 id="model-parameters-heading">{t("模型参数")}</h2>
+    </div>
+    <div className="field">
+      <label htmlFor="model-parameters-model">{t("选择要配置的模型")}</label>
+      <select id="model-parameters-model" value={option.key} disabled={busy} onChange={event => { setChoice(event.target.value); setFeedback("") }}>
+        {connections.map(({ profile }) => <optgroup key={profile.id} label={profile.label}>
+          {profile.models.map(id => <option key={id} value={optionKey(profile.id, id)}>{id}</option>)}
+        </optgroup>)}
+      </select>
+    </div>
+    {levels.length > 0 ? <div className="field">
+      <label htmlFor="model-parameters-effort">{t("思考强度")}</label>
+      <select id="model-parameters-effort" value={deepseek && effort === "none" ? "" : effort ?? ""} disabled={busy}
+        onChange={event => void save(event.target.value)}>
+        <option value="">{t(deepseek ? "关闭（默认）" : "模型默认")}</option>
+        {levels.filter(level => !deepseek || level !== "none").map(level =>
+          <option key={level} value={level}>{t(effortLabels[level])}</option>)}
+      </select>
+    </div> : <p className="hint">{t("此模型未提供可调节的思考强度。")}</p>}
+    {!isBuiltinProvider(provider) && <p className="hint">{t("自定义端点需支持 reasoning_effort。")}</p>}
+    {feedback && <p className="notice" role="status">{t(feedback)}</p>}
   </section>
 }
 

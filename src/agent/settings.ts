@@ -1,3 +1,4 @@
+import { modelReasoningEffort, type ReasoningEffort } from "./model-options"
 import { completionEndpoint, isBuiltinProvider, isProviderId, modelHostPattern, providerLabels, providers, testProvider, type ProviderId } from "./provider"
 
 export interface ConnectionProfile {
@@ -10,6 +11,7 @@ export interface ConnectionProfile {
 export interface ModelConnection {
   profile: ConnectionProfile
   connected: boolean
+  reasoning?: Record<string, ReasoningEffort>
 }
 
 export interface ModelChoice {
@@ -18,6 +20,7 @@ export interface ModelChoice {
 }
 
 const providerKey = "provider-"
+const effortKey = (id: ProviderId, model: string) => "model-reasoning-" + JSON.stringify([id, model])
 
 function connectionProfile(id: ProviderId, raw: unknown): ConnectionProfile | undefined {
   const saved = raw as (Partial<ConnectionProfile> & { model?: string }) | undefined
@@ -48,7 +51,12 @@ export async function readModelSettings(): Promise<{ connections: ModelConnectio
   const connections = ids.flatMap(id => {
     const name = providerKey + id
     const profile = connectionProfile(id, local[name])
-    return profile ? [{ profile, connected: keyFor(profile, session[name]) !== undefined }] : []
+    if (!profile) return []
+    const reasoning = Object.fromEntries(profile.models.flatMap(model => {
+      const effort = modelReasoningEffort(id, model, local[effortKey(id, model)])
+      return effort ? [[model, effort]] : []
+    }))
+    return [{ profile, connected: keyFor(profile, session[name]) !== undefined, reasoning }]
   })
   const choices = connections.filter(item => item.connected).flatMap(({ profile }) =>
     profile.models.map(model => ({ provider: profile.id, model })))
@@ -56,6 +64,13 @@ export async function readModelSettings(): Promise<{ connections: ModelConnectio
   const selected = choices.find(choice => choice.provider === saved?.provider && choice.model === saved?.model) ??
     choices.find(choice => choice.provider === (saved?.provider ?? local.selectedProvider)) ?? choices[0]
   return { connections, selected }
+}
+
+export async function saveReasoningEffort(id: ProviderId, model: string, effort?: ReasoningEffort): Promise<void> {
+  const key = effortKey(id, model)
+  if (effort === undefined) return chrome.storage.local.remove(key)
+  if (!modelReasoningEffort(id, model, effort)) throw new Error("所选模型不支持该思考强度")
+  await chrome.storage.local.set({ [key]: effort })
 }
 
 export async function connectProvider(profile: ConnectionProfile, key: string, authorized: Promise<boolean>): Promise<void> {
@@ -88,5 +103,7 @@ export async function providerForRun(id: ProviderId, model?: string) {
   if (!await chrome.permissions.contains({ origins: [modelHostPattern(connection.baseUrl)] })) {
     throw new Error("请在设置中重新连接模型并授权 API 地址")
   }
-  return { profile: { id, baseUrl: connection.baseUrl, model: selected }, apiKey }
+  const key = effortKey(id, selected)
+  const reasoningEffort = modelReasoningEffort(id, selected, (await chrome.storage.local.get(key))[key])
+  return { profile: { id, baseUrl: connection.baseUrl, model: selected, reasoningEffort }, apiKey }
 }

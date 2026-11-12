@@ -29,6 +29,12 @@ const savedMessageFormats: ReadonlyArray<readonly [RegExp, string]> = [
   [/^有 (?<count>\d+) 条归纳缺少有效来源$/, "有 {count} 条归纳缺少有效来源"],
   [/^需要 (?<count>\d+) 条独立来源，当前引用 (?<current>\d+) 条$/, "需要 {count} 条独立来源，当前引用 {current} 条"],
   [/^缺少主题 (?<topics>.+)$/s, "缺少主题 {topics}"],
+  [/^找到 (?<count>\d+) 个标签页$/, "找到 {count} 个标签页"],
+  [/^已选 (?<count>\d+) 个标签页$/, "已选 {count} 个标签页"],
+  [/^已编组 (?<count>\d+) 个标签页$/, "已编组 {count} 个标签页"],
+  [/^已编组 (?<count>\d+) 个标签页 · (?<title>.+)$/s, "已编组 {count} 个标签页 · {title}"],
+  [/^已取消 (?<count>\d+) 个标签页的分组$/, "已取消 {count} 个标签页的分组"],
+  [/^已移动 (?<count>\d+) 个标签页$/, "已移动 {count} 个标签页"],
 ]
 
 export type Translate = (message: string, values?: Record<string, string | number>) => string

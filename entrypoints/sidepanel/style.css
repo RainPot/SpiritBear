@@ -188,7 +188,11 @@ small, .empty { color: var(--muted); }
 .field { display: block; font-weight: 650; margin-top: 11px; }
 .field.url-field { margin: 0 0 4px; font-size: 12px; }
 input, textarea { width: 100%; color: var(--ink); border: 1px solid var(--control-border); border-radius: 8px; background: var(--canvas); padding: 8px 9px; }
-.field input { display: block; margin-top: 4px; }
+.field input, .field select { display: block; margin-top: 4px; }
+.field select {
+  width: 100%; min-width: 0; color: var(--ink); background: var(--canvas);
+  border: 1px solid var(--control-border); border-radius: 8px; padding: 8px 9px;
+}
 .field textarea { display: block; margin-top: 4px; resize: vertical; font-weight: 400; }
 textarea::placeholder, input::placeholder { color: var(--muted); }
 .language-setting { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

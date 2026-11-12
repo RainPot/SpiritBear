@@ -3,6 +3,7 @@ import { z } from "zod"
 const choiceSchema = z.object({
   delta: z.object({
     content: z.string().nullish(),
+    reasoning_content: z.string().nullish(),
     tool_calls: z.array(z.object({
       index: z.number().int().min(0).max(19),
       id: z.string().nullish(),
@@ -31,13 +32,14 @@ export function visibleAssistantText(value: string, streaming = false): string {
     ? text.slice(0, start) : text
 }
 
-export async function readCompletionStream(body: ReadableStream<Uint8Array>, onText?: (text: string) => void): Promise<unknown> {
+export async function readCompletionStream(body: ReadableStream<Uint8Array>, onText?: (text: string) => void, retainReasoning = false): Promise<unknown> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   const calls = new Map<number, StreamingTool>()
   const separator = /\r?\n\r?\n/
   let buffer = ""
   let content = ""
+  let reasoning: string | undefined
   let preview = ""
   let tokens: number | undefined
   let finished = false
@@ -54,6 +56,10 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, onT
     if (!choice) return
     finished ||= Boolean(choice.finish_reason)
     content += choice.delta?.content ?? ""
+    if (retainReasoning && choice.delta?.reasoning_content != null) {
+      reasoning = (reasoning ?? "") + choice.delta.reasoning_content
+      if (reasoning.length > 2_000_000) throw new Error("模型推理响应过长")
+    }
     if (content.length > 120_000) throw new Error("模型回复过长")
     for (const delta of choice.delta?.tool_calls ?? []) {
       const call: StreamingTool = calls.get(delta.index) ?? { id: "", type: "function", function: { name: "", arguments: "" } }
@@ -95,5 +101,5 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, onT
   }
   if (!done && !finished) throw new Error("模型的流式回复中途断开")
   const tool_calls = [...calls.entries()].sort(([left], [right]) => left - right).map(([, call]) => call)
-  return { choices: [{ message: { content, tool_calls } }], usage: { total_tokens: tokens } }
+  return { choices: [{ message: { content, tool_calls, reasoning_content: reasoning } }], usage: { total_tokens: tokens } }
 }

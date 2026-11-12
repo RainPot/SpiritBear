@@ -2,6 +2,8 @@ import { z } from "zod"
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/)
 const label = z.string().trim().min(1).max(120)
+const tabId = z.number().int().nonnegative()
+const tabIds = z.array(tabId).min(1).max(40)
 const element = z.strictObject({ pageId: id, observationId: id, elementId: id })
 
 export const reportSchema = z.strictObject({
@@ -29,6 +31,18 @@ const schemas = {
     url: z.string().url().regex(/^https:\/\//i).max(2048).optional(),
   }),
   observe_page: z.strictObject({ pageId: id }),
+  list_tabs: z.strictObject({
+    query: label.optional(),
+    offset: z.number().int().nonnegative().optional(),
+  }),
+  use_tabs: z.strictObject({ tabIds: z.array(tabId).min(1).max(12) }),
+  manage_tabs: z.strictObject({
+    tabIds,
+    action: z.enum(["group", "ungroup", "move", "activate"]),
+    title: label.optional(),
+    color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]).optional(),
+    index: z.number().int().min(-1).optional(),
+  }),
   interact: z.strictObject({
     pageId: id,
     observationId: id,
@@ -44,9 +58,12 @@ const schemas = {
 
 const toolDescriptions: Record<keyof typeof schemas, string> = {
   plan_task: "记录用户要检索的主题、来源数量和明确要求的报告标题。summary 可用一句给用户看的话说明准备查什么、如何核对。只记录一次。",
-  open_page: "新建任务页。仅提供一个参数：复制指定页 fromPageId，打开观察中的链接 link，或访问用户授权站点的 HTTPS 地址 url。",
+  open_page: "新建任务页。仅提供一个参数：复制指定页 fromPageId，打开观察中的链接 link，或访问 HTTPS 地址 url（新站点会请求授权）。",
   observe_page: "读取指定页的可见正文、链接和查询控件。导航或页面变化后重新观察。",
-  interact: "在任务页操作最近观察。search 使用搜索框 elementId 与 value 输入并尝试查询。click 点击查询控件。choose 使用下拉控件和选项 value。scroll 使用 direction。",
+  list_tabs: "仅在用户要求处理标签页时列出当前 Chrome 窗口的标签页标题、站点、分组和顺序。query 可按标题、站点或分组筛选，使用 nextOffset 继续读取。",
+  use_tabs: "把选中的现有 HTTPS 标签页加入任务的只读参考。tabIds 来自 list_tabs 或已引用的标签页。用返回的 pageId 逐页观察正文。",
+  manage_tabs: "按用户明确指令整理现有标签页。group 指定组名称 title，可选 color；ungroup 移出分组；move 以 index 指定从零开始的顺序（-1 表示末尾）；activate 切换到单个标签页。依据执行回执答复。",
+  interact: "在任务页操作最近观察。search 使用搜索框 elementId 与 value 输入并尝试查询。click 点击查询控件或可见的只读导航。choose 使用下拉控件和选项 value。scroll 使用 direction。",
   collect_source: "将当前已打开页面的正文登记为引用。提供最近观察的 observationId，使用返回的证据 ID。",
   finish_report: "提交按主题整理的报告。每条归纳需使用 collect_source 返回的证据 ID。",
   pause_task: "需要用户登录、处理验证码或接管时暂停，并指明页面与原因。",

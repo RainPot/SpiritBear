@@ -2,6 +2,8 @@ import { visibleAssistantText } from "../agent/completion-stream"
 import type { ToolCall, ToolName } from "../agent/contracts"
 import { buildReport } from "../agent/report"
 import { getPage, NeedsUser, newTaskPage, pageUrl, sendToPage } from "../browser/browser"
+import { isTabTask, requestsTabSummary } from "../browser/tab-intent"
+import { changeWindowTabs, listWindowTabs, referenceWindowTabs } from "../browser/tabs"
 import { requiresSearchBox, searchWasObserved } from "../browser/search-proof"
 import type { RunState } from "./state"
 
@@ -17,6 +19,9 @@ export const toolLabels: Record<ToolName, string> = {
   plan_task: "识别任务目标",
   open_page: "打开任务页",
   observe_page: "读取页面",
+  list_tabs: "查看窗口标签页",
+  use_tabs: "选取参考标签页",
+  manage_tabs: "整理标签页",
   interact: "操作查询控件",
   collect_source: "采集来源",
   finish_report: "验收报告",
@@ -64,7 +69,19 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
         target = requireField<string>(response, "url")
       }
       if (!target) throw new Error("没有可用的页面地址")
-      const opened = await newTaskPage(run, target)
+      let opened: OpenedPage
+      try {
+        opened = await newTaskPage(run, target)
+      } catch (error) {
+        if (!(error instanceof NeedsUser) || !error.origin) throw error
+        const pendingNavigation = { url: target, fromPageId: link?.pageId ?? fromPageId ?? run.pendingNavigation?.fromPageId }
+        return {
+          output: { error: error.message },
+          detail: error.message,
+          needsUser: error,
+          update(current) { current.pendingNavigation = pendingNavigation },
+        }
+      }
       return {
         output: { pageId: opened.page.id, url: opened.url },
         detail: opened.page.origin,
@@ -74,8 +91,9 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
           const pending = current.pendingNavigation
           if (pending?.url === target) {
             const search = current.searchAttempt
-            if (search?.pageId === pending.fromPageId) search.pageId = opened.page.id
+            if (search && search.pageId === pending.fromPageId) search.pageId = opened.page.id
             current.pendingNavigation = undefined
+            current.pendingObservation = opened.page.id
           }
         },
       }
@@ -99,6 +117,7 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
           target.url = observation.url
           const snapshot = { url: observation.url, text: observation.text.slice(0, 1200) }
           target.observation = snapshot
+          if (current.pendingObservation === page.id) current.pendingObservation = undefined
           const search = current.searchAttempt
           if (search?.pageId === page.id && searchWasObserved(search.query, search.before, snapshot)) {
             current.searchResult = { url: observation.url, title: observation.title }
@@ -107,6 +126,43 @@ export async function executeStep(run: RunState, tool: ToolCall): Promise<Step> 
           current.focusTabId = target.tabId
         },
       }
+    }
+    case "list_tabs": {
+      if (!isTabTask(run.task)) throw new Error("请在消息中指定要处理的标签页")
+      const output = await listWindowTabs(run.windowId, tool.args.offset ?? 0, tool.args.query)
+      return { output, detail: "找到 " + output.total + " 个标签页" }
+    }
+    case "use_tabs": {
+      if (!isTabTask(run.task)) throw new Error("请在消息中指定要处理的标签页")
+      const { pages, newPages, approved } = await referenceWindowTabs(run, tool.args.tabIds)
+      return {
+        output: { pages: pages.map(page => ({ pageId: page.id, title: page.title, origin: page.origin })) },
+        detail: "已选 " + pages.length + " 个标签页",
+        update(current) {
+          for (const page of newPages) {
+            const stale = current.pages.findIndex(saved => saved.tabId === page.tabId && saved.role === "reference")
+            if (stale < 0) current.pages.push(page)
+            else current.pages[stale] = page
+          }
+          current.references = current.pages.filter(page => page.role === "reference").map(page => page.title)
+          current.allowedOrigins = [...new Set([...current.allowedOrigins, ...approved])]
+          if (requestsTabSummary(current.task)) {
+            current.summaryTabIds = [...new Set([...(current.summaryTabIds ?? current.explicitTabIds ?? []), ...pages.map(page => page.tabId)])]
+          }
+        },
+      }
+    }
+    case "manage_tabs": {
+      if (!isTabTask(run.task) && !run.explicitTabIds?.length) throw new Error("请在消息中指定要处理的标签页")
+      const output = await changeWindowTabs(run, tool.args)
+      const count = output.tabIds.length
+      const details = {
+        group: "已编组 " + count + " 个标签页" + (output.group ? " · " + output.group : ""),
+        ungroup: "已取消 " + count + " 个标签页的分组",
+        move: "已移动 " + count + " 个标签页",
+        activate: "已切换标签页",
+      }
+      return { output, detail: details[output.action], dispatched: true }
     }
     case "interact": {
       const page = getPage(run, tool.args.pageId)

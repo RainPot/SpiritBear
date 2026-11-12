@@ -3,7 +3,7 @@ export interface Observation {
   title: string
   url: string
   text: string
-  links: { elementId: string; label: string }[]
+  links: { elementId: string; label: string; origin?: string }[]
   controls: { elementId: string; label: string; kind: "search" | "click" | "choose"; options?: { label: string; value: string }[] }[]
   blocked?: "login" | "challenge"
   searchRequiresLogin?: boolean

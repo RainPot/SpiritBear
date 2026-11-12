@@ -41,6 +41,8 @@ export interface RunState {
   session: string
   conversationId?: string
   references?: string[]
+  explicitTabIds?: number[]
+  summaryTabIds?: number[]
   attachments?: AttachmentSummary[]
   owner?: string
   windowId: number
@@ -56,7 +58,8 @@ export interface RunState {
   planSummary?: string
   searchAttempt?: { pageId: string; query: string; before: SearchSnapshot }
   searchResult?: { url: string; title: string }
-  pendingNavigation?: { url: string; fromPageId: string }
+  pendingNavigation?: { url: string; fromPageId?: string }
+  pendingObservation?: string
   pages: RunPage[]
   activePageId?: string
   allowedOrigins: string[]

@@ -152,6 +152,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
     id, session, owner, windowId: input.windowId,
     conversationId: previous ? conversationId(previous) : id,
     references: pages.length ? pages.map(page => page.title) : undefined,
+    explicitTabIds: input.references.length ? input.references.map(page => page.tabId) : undefined,
     attachments: attachments.length ? attachments.map(attachmentSummary) : undefined,
     task, provider: input.provider, model: input.model, pageAction: input.pageAction,
     uiLanguage: resolveUiLanguage(input.uiLanguage), startUrl, pages, activePageId,
@@ -245,7 +246,10 @@ async function step(id: string, owner: string, name: string, raw: string): Promi
         // 打开动作状态不明时，继续任务不应自动重复开页。
         current.pendingNavigation = undefined
       }
-      if (error instanceof NeedsUser) waitForUser(current, error)
+      if (error instanceof NeedsUser) {
+        if (tool.name === "observe_page") current.pendingObservation = tool.args.pageId
+        waitForUser(current, error)
+      }
     })
     return { run: announce(run), output: { error: message, outcome } }
   }

@@ -13,7 +13,7 @@ import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 import { Compose, type ComposeMessage } from "./compose"
 import { runLabel, RunView } from "./run-view"
-import { LanguageSetting, Settings } from "./settings"
+import { LanguageSetting, ModelParameters, Settings } from "./settings"
 import { SiteGuides } from "./site-guides"
 import { useLanguage } from "./language"
 
@@ -287,6 +287,8 @@ export function App() {
     {section === "settings" ? <div className="settings-body">
       <LanguageSetting />
       <Settings connections={models.connections} onChanged={async () => setModels(await readModelSettings())} />
+      <ModelParameters connections={models.connections} selected={models.selected}
+        onChanged={async () => setModels(await readModelSettings())} />
       <SiteGuides />
     </div> : <div className="chat-area">
       <div className="transcript" ref={transcript} onScroll={event => {
