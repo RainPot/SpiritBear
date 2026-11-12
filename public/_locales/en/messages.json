@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Spirit Bear"
+  },
+  "extensionDescription": {
+    "message": "An AI browser assistant for chat, web research, reading local files, and exporting results."
+  },
+  "openExtension": {
+    "message": "Open Spirit Bear"
+  }
+}

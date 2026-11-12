@@ -14,9 +14,11 @@ export default defineConfig({
     },
   },
   manifest: {
-    name: "TabErrand",
+    name: "__MSG_extensionName__",
+    description: "__MSG_extensionDescription__",
+    default_locale: "en",
     minimum_chrome_version: "116",
-    action: { default_title: "打开 TabErrand", default_icon: icons },
+    action: { default_title: "__MSG_openExtension__", default_icon: icons },
     icons,
     permissions: ["sidePanel", "tabs", "tabGroups", "scripting", "storage", "downloads"],
     optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],

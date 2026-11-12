@@ -5,6 +5,7 @@ import { evidenceDraft, replyMarkdown } from "../src/agent/report"
 import { getPage, getTab, NeedsUser, UnconfirmedAction } from "../src/browser/browser"
 import { requiresSearchBox } from "../src/browser/search-proof"
 import { cleanPageUrl, hostPattern, pageOrigin } from "../src/browser/urls"
+import { getExtensionName } from "../src/extension-name"
 import { executeStep, toolLabels } from "../src/run/execute"
 import { requestsMarkdown } from "../src/run/intent"
 import { changeRun, clearRuns, createRun, getRun, listRuns } from "../src/run/store"
@@ -101,7 +102,7 @@ async function start(input: StartInput, owner: string): Promise<RunState> {
   if (input.pageAction !== undefined && (!Object.hasOwn(pageActionLabels, input.pageAction) ||
     input.references.length !== 1 || input.startUrl || input.currentPage || attachments.length)) throw new Error("请选择一个网页进行总结或翻译")
   const window = await chrome.windows.get(input.windowId)
-  if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用 TabErrand")
+  if (window.type !== "normal" || window.incognito) throw new Error("请在普通 Chrome 窗口使用" + getExtensionName())
   const session = await sessionId()
   const previous = input.previousRunId ? await getRun(input.previousRunId) : undefined
   const pages: RunPage[] = []

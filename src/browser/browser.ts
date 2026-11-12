@@ -1,5 +1,6 @@
 import type { PageCommand, PageReply } from "./page-protocol"
 import { cleanPageUrl, hostPattern, pageOrigin } from "./urls"
+import { getExtensionName } from "../extension-name"
 import type { RunPage, RunState } from "../run/state"
 
 export class NeedsUser extends Error {
@@ -141,7 +142,7 @@ export async function newTaskPage(run: RunState, url: string): Promise<{ page: R
   if (groupId === undefined) {
     groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId: run.windowId } }).catch(() => undefined)
     if (groupId !== undefined) {
-      await chrome.tabGroups.update(groupId, { title: "TabErrand · " + run.task.slice(0, 15), color: "blue" }).catch(() => undefined)
+      await chrome.tabGroups.update(groupId, { title: getExtensionName() + " · " + run.task.slice(0, 15), color: "blue" }).catch(() => undefined)
     }
   }
   const cleaned = cleanPageUrl(url)

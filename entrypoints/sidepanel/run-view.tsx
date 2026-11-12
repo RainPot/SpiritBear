@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import { replyMarkdown } from "../../src/agent/report"
+import { getExtensionName } from "../../src/extension-name"
 import { requestsMarkdown } from "../../src/run/intent"
 import type { RunState } from "../../src/run/state"
 import { ChatIcon } from "./chat-icon"
@@ -151,7 +152,7 @@ export function RunView({ run, preview, current, live, busy, takeOver, resume, a
     }
   }
 
-  return <article className="assistant-message" aria-label="TabErrand 回复">
+  return <article className="assistant-message" aria-label={getExtensionName() + " 回复"}>
     <RunProcess run={run} replying={Boolean(liveReply)}>
       {live && taskPages.length > 0 && <div className="task-pages">
         <details>

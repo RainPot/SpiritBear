@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "熊灵"
+  },
+  "extensionDescription": {
+    "message": "在 Chrome 侧栏用自选模型对话、浏览网页、阅读本地文件并按需导出结果"
+  },
+  "openExtension": {
+    "message": "打开熊灵"
+  }
+}

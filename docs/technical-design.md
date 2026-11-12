@@ -1,10 +1,10 @@
-# TabErrand 技术方案
+# 熊灵 · Spirit Bear 技术方案
 
 设计稿 · 2026-11-11 · [产品 README](../README.md)
 
 ## 1. 首版交付
 
-TabErrand 是一个运行在用户现有 Chrome 中的浏览器 Agent。侧栏以对话为入口，可以直接提问、阅读当前页，或在专用任务标签页里搜索、筛选和阅读。需要交付文件时，可以把结果导出成 Markdown。
+熊灵是一个运行在用户现有 Chrome 中的浏览器 Agent。侧栏以对话为入口，可以直接提问、阅读当前页，或在专用任务标签页里搜索、筛选和阅读。需要交付文件时，可以把结果导出成 Markdown。
 
 | 已确认的决策 | 对首版的要求 |
 | --- | --- |
@@ -139,7 +139,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 **最后由 Checker 验收任务目标。** 规则核对去重后的来源数量、用户要求的主题结构和每条归纳是否引用已有证据。用户明确要求使用网页搜索框时，Checker 同时核对输入派发和搜索后的新页面观察。缺少该证据时，Agent 收到补做搜索的反馈。来源不足或字段缺失时展示部分结果和原因。相关性与摘要是否忠实于原文另用人工标注样本评测，报告结构检查不能替代语义评测。
 
-普通任务以对话回复结束。侧栏识别用户的保存指令并在发送前展示自动下载提示，Worker 在创建自动下载时复核意图和结果状态。手动保存可导出纯文本回复或已有报告。下载使用 UTF-8 Markdown Blob 和 `chrome.downloads.download`，自动保存到 Chrome 默认目录下的 `TabErrand/`。「另存为」使用 `saveAs: true`。Worker 用 `downloadId` 对账后显示实际文件名与「在文件夹中显示」。 [Chrome Downloads API](https://developer.chrome.com/docs/extensions/reference/api/downloads)
+普通任务以对话回复结束。侧栏识别用户的保存指令并在发送前展示自动下载提示，Worker 在创建自动下载时复核意图和结果状态。手动保存可导出纯文本回复或已有报告。下载使用 UTF-8 Markdown Blob 和 `chrome.downloads.download`，自动保存到 Chrome 默认目录下的 `熊灵/` 或 `Spirit Bear/`，文件夹名称跟随 Chrome 语言。「另存为」使用 `saveAs: true`。Worker 用 `downloadId` 对账后显示实际文件名与「在文件夹中显示」。 [Chrome Downloads API](https://developer.chrome.com/docs/extensions/reference/api/downloads)
 
 | 结果 | 侧栏表现 |
 | --- | --- |

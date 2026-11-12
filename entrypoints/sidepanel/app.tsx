@@ -3,6 +3,7 @@ import type { ChatAttachment } from "../../src/agent/attachments"
 import type { ProviderProfile } from "../../src/agent/provider"
 import { providerForRun, readModelSettings, type ModelChoice } from "../../src/agent/settings"
 import { hostPattern, pageOrigin } from "../../src/browser/urls"
+import { getExtensionName } from "../../src/extension-name"
 import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
 import { requestsMarkdown } from "../../src/run/intent"
@@ -255,7 +256,7 @@ export function App() {
 
   return <main className="shell">
     <header className="topbar">
-      <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>TabErrand</strong></div>
+      <div className="brand"><img className="brand-logo" src="/icon/128.png" width={26} height={26} alt="" /><strong>{getExtensionName()}</strong></div>
       <nav className="navigation" aria-label="对话导航">
         <button disabled={busy || running} onClick={() => switchThread()}>新对话</button>
         <button aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>历史</button>

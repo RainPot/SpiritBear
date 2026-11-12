@@ -1,3 +1,4 @@
+import { getExtensionName } from "../extension-name"
 import type { PanelClient } from "./client"
 import type { MarkdownExport, RunState } from "./state"
 
@@ -8,7 +9,7 @@ export async function saveMarkdown(client: PanelClient, runId: string, automatic
   try {
     downloadId = await chrome.downloads.download({
       url,
-      filename: "TabErrand/" + filename,
+      filename: getExtensionName() + "/" + filename,
       conflictAction: "uniquify",
       saveAs: !automatic,
     })
