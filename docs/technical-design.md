@@ -47,7 +47,7 @@ flowchart TB
 
 MVP 使用 TypeScript、WXT 和 React。WXT 负责构建 Manifest V3 的侧栏、后台和按需注入脚本。Agent、模型适配、报告生成作为独立 TypeScript 模块，可用模拟模型和网页夹具验证。Chrome 116 作为 API 基线，实际验收记录当时的 Chrome 稳定版版本。 [WXT 入口定义](https://wxt.dev/guide/essentials/entrypoints.html) · [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 
-端点编辑表单在用户点击「拉取模型」后访问同一个 API Base URL 下的 `/models`，读取 `data[].id`。现有会话密钥仅在地址匹配时复用。OpenAI 使用 `/v1/models`，DeepSeek 使用 `/models`。Gemini 的 OpenAI 兼容入口和 Kimi 也提供模型列表，可用对应的兼容端点配置。Claude 提供单独的模型列表参考，接入时按账号的鉴权要求配置。连接时用已选列表里的第一个 ID 测试对话端点的工具调用。端点缺少兼容列表时，可以手填 ID。 [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list) · [DeepSeek](https://api-docs.deepseek.com/api/list-models/) · [Gemini](https://ai.google.dev/gemini-api/docs/openai) · [Kimi](https://platform.kimi.com/docs/api/list-models) · [Claude](https://platform.claude.com/docs/en/api/models/list)
+端点配置在可用密钥和 Chrome 主机权限具备时自动读取同一 API Base URL 下的 `/models`，使用 `data[].id` 填充模型下拉框。首次连接在 Chrome 授权后加载目录，并用所选默认模型测试工具调用。打开侧栏时刷新已连接端点的模型目录，刷新结果按连接会话绑定。现有会话密钥仅在地址匹配时复用。OpenAI 使用 `/v1/models`，DeepSeek 使用 `/models`。Gemini 的 OpenAI 兼容入口和 Kimi 也提供模型列表。 [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list) · [DeepSeek](https://api-docs.deepseek.com/api/list-models/) · [Gemini](https://ai.google.dev/gemini-api/docs/openai) · [Kimi](https://platform.kimi.com/docs/api/list-models)
 
 ## 3. 标签页与授权
 
@@ -125,7 +125,7 @@ Worker 在派发动作前持久化 `actionId` 和运行版本。同一浏览器�
 
 ## 5. 模型连接与选择
 
-每个连接包含名称、Base URL、模型 ID 列表和会话 API Key。内置 OpenAI 和 DeepSeek，也能添加多个 OpenAI 兼容端点。设置页先验证连接和首个模型的工具调用能力，对话输入框列出已连接的模型。本轮任务使用发起时所选模型，操作进度由本地事件更新。
+每个连接包含名称、Base URL、自动发现的模型目录和会话 API Key。内置 OpenAI 和 DeepSeek，也能添加多个 OpenAI 兼容端点。设置页用下拉框选择默认模型并验证工具调用能力，对话输入框列出已连接端点的模型。本轮任务使用发起时所选模型，操作进度由本地事件更新。
 
 | 预设 | Base URL | 工具协议 |
 | --- | --- | --- |

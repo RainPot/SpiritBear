@@ -45,32 +45,35 @@ export function modelHostPattern(baseUrl: string): string {
   return endpoint.protocol + "//" + endpoint.hostname + "/*"
 }
 
-export async function listProviderModels(baseUrl: string, apiKey: string): Promise<string[]> {
+export async function listProviderModels(baseUrl: string, apiKey: string, signal?: AbortSignal): Promise<string[]> {
   const endpoint = completionEndpoint(baseUrl)
   endpoint.pathname = endpoint.pathname.replace(/\/chat\/completions$/, "/models")
-  const signal = AbortSignal.timeout(15_000)
+  const deadline = AbortSignal.timeout(15_000)
+  const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
   let response: Response
   try {
     response = await fetch(endpoint.href, {
       method: "GET",
       headers: apiKey ? { Authorization: "Bearer " + apiKey } : {},
-      credentials: "omit", redirect: "error", cache: "no-store", signal,
+      credentials: "omit", redirect: "error", cache: "no-store", signal: requestSignal,
     })
   } catch {
-    throw new Error(signal.aborted ? "拉取模型列表超时" : "无法连接模型列表接口，请检查地址和网络")
+    signal?.throwIfAborted()
+    throw new Error(deadline.aborted ? "拉取模型列表超时" : "无法连接模型列表接口，请检查地址和网络")
   }
   if (response.status === 401 || response.status === 403) throw new Error("模型 API 拒绝鉴权，请检查 API Key 和模型访问权限")
-  if ([404, 405, 501].includes(response.status)) throw new Error("该端点未提供模型列表，请手动填写模型 ID")
+  if ([404, 405, 501].includes(response.status)) throw new Error("该端点未提供模型列表，请检查 API 地址")
   if (!response.ok) throw new Error("模型列表请求返回 HTTP " + response.status)
 
   const payload = await response.json().catch(() => undefined) as { data?: unknown } | undefined
-  if (signal.aborted) throw new Error("拉取模型列表超时")
-  if (!Array.isArray(payload?.data)) throw new Error("模型列表格式不兼容，请手动填写模型 ID")
+  signal?.throwIfAborted()
+  if (deadline.aborted) throw new Error("拉取模型列表超时")
+  if (!Array.isArray(payload?.data)) throw new Error("模型列表格式不兼容")
   const ids = payload.data.flatMap(item => {
     const id = item && typeof item === "object" && typeof item.id === "string" ? item.id.trim() : ""
     return id && id.length <= 160 && !/[\r\n]/.test(id) ? [id] : []
   })
-  if (!ids.length) throw new Error("接口没有返回可添加的模型 ID")
+  if (!ids.length) throw new Error("接口没有返回可用的模型")
   return [...new Set(ids)].sort((a, b) => a.localeCompare(b))
 }
 

@@ -11,7 +11,7 @@ import { AttachmentList, AttachmentPreview } from "./attachment-view"
 import { ChatIcon } from "./chat-icon"
 import { useLanguage } from "./language"
 
-export type ComposeMessage = Omit<StartInput, "provider" | "model" | "previousRunId" | "windowId" | "uiLanguage"> & { windowId?: number }
+export type ComposeMessage = Omit<StartInput, "provider" | "model" | "previousRunId" | "windowId" | "uiLanguage" | "startUrl"> & { windowId?: number }
 type AttachmentIssue = { message: string; name?: string }
 
 interface Props {
@@ -45,8 +45,6 @@ const modelKey = (choice: ModelChoice) => JSON.stringify([choice.provider, choic
 export function Compose({ busy, hidden, running, connections, model, previousAttachmentsRunId, onModel, onEffort, onSettings, onPause, onSend }: Props) {
   const { language, t } = useLanguage()
   const [task, setTask] = useState("")
-  const [startUrl, setStartUrl] = useState("")
-  const [showUrl, setShowUrl] = useState(false)
   const [refs, setRefs] = useState<PageRef[]>([])
   const [tabs, setTabs] = useState<PageRef[]>([])
   const [activeTab, setActiveTab] = useState<{ page: PageRef; windowId: number }>()
@@ -196,7 +194,7 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
     onSend({
       task: task.trim() || t("请阅读附件并概括主要内容。"),
       references: refs, attachments: attachments.length ? attachments : undefined,
-      currentPage: current, startUrl, windowId: windowId ?? activeTab?.windowId,
+      currentPage: current, windowId: windowId ?? activeTab?.windowId,
     })
   }
 
@@ -222,7 +220,7 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
   }
 
   return <div className="composer" hidden={hidden}>
-    {activeTab && !running && !task && !refs.length && !attachments.length && !reading && !startUrl && !picker &&
+    {activeTab && !running && !task && !refs.length && !attachments.length && !reading && !picker &&
       <div className="page-shortcuts" role="group" aria-label={t("网页快捷操作")}>
         {(["summarize", "translate"] as const).map(action =>
           <button key={action} type="button" className="plain small" disabled={busy}
@@ -290,9 +288,6 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
           }}><ChatIcon name="close" size={13} /></button>
         </li>)}
       </ul>}
-      {showUrl && <label className="field url-field">{t("起始网址")}
-        <input type="url" value={startUrl} onChange={event => setStartUrl(event.target.value)} placeholder="https://example.com" disabled={busy} />
-      </label>}
       <textarea ref={editor} aria-label={t("任务指令")} value={task} maxLength={6000} disabled={busy}
         aria-controls={picker ? "tab-options" : undefined} rows={1}
         aria-activedescendant={picker && matches[focused] ? "tab-option-" + matches[focused].tabId : undefined}
@@ -323,7 +318,7 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
           }
         }}>
           <button ref={attachmentButton} type="button" className="plain small add-context" disabled={busy || reading}
-            title={t("添加截图、文件、标签页或网址")} aria-label={t("添加附件")} aria-expanded={attachmentOpen}
+            title={t("添加截图、文件或标签页")} aria-label={t("添加附件")} aria-expanded={attachmentOpen}
             onClick={() => { setPicker(false); setAttachmentOpen(!attachmentOpen) }}>
             <ChatIcon name="add" size={17} /><span>{t("附件")}</span>
           </button>
@@ -341,10 +336,6 @@ export function Compose({ busy, hidden, running, connections, model, previousAtt
             }}>{t("复用上次附件")}</button>}
             <button type="button" className="plain" disabled={refs.length >= 12}
               onClick={() => { void openPicker(); editor.current?.focus() }}>{t("@ 标签页")}</button>
-            <button type="button" className="plain" onClick={() => {
-              setAttachmentOpen(false)
-              setShowUrl(!showUrl)
-            }}>{t(showUrl ? "隐藏网址" : "添加网址")}</button>
           </div>}
         </div>
         <div className={"send-group" + (levels.length ? " has-reasoning" : "")}>

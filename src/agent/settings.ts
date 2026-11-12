@@ -20,6 +20,23 @@ export interface ModelChoice {
 }
 
 const providerKey = "provider-"
+const catalogKey = "model-catalog-"
+
+interface SessionConnection {
+  key: string
+  endpoint: string
+  revision?: string
+}
+
+interface SessionCatalog {
+  endpoint: string
+  revision?: string
+  models: string[]
+}
+
+export function preferredModels(models: string[], preferred: string): string[] {
+  return models.includes(preferred) ? [preferred, ...models.filter(model => model !== preferred)] : models
+}
 const effortKey = (id: ProviderId, model: string) => "model-reasoning-" + JSON.stringify([id, model])
 
 function connectionProfile(id: ProviderId, raw: unknown): ConnectionProfile | undefined {
@@ -33,10 +50,10 @@ function connectionProfile(id: ProviderId, raw: unknown): ConnectionProfile | un
   return { id, label, baseUrl, models }
 }
 
-function keyFor(profile: Pick<ConnectionProfile, "baseUrl">, raw: unknown): string | undefined {
-  const saved = raw as { key?: string; endpoint?: string } | undefined
+function sessionFor(profile: Pick<ConnectionProfile, "baseUrl">, raw: unknown): SessionConnection | undefined {
+  const saved = raw as SessionConnection | undefined
   try {
-    if (typeof saved?.key === "string" && saved.endpoint === completionEndpoint(profile.baseUrl).href) return saved.key
+    if (typeof saved?.key === "string" && saved.endpoint === completionEndpoint(profile.baseUrl).href) return saved
   } catch { /* 保留配置供用户修正地址。 */ }
 }
 
@@ -47,16 +64,21 @@ export async function readModelSettings(): Promise<{ connections: ModelConnectio
     const id = key.slice(providerKey.length)
     if (key.startsWith(providerKey) && isProviderId(id) && !isBuiltinProvider(id)) ids.push(id)
   }
-  const session = await chrome.storage.session.get(ids.map(id => providerKey + id))
+  const session = await chrome.storage.session.get(ids.flatMap(id => [providerKey + id, catalogKey + id]))
   const connections = ids.flatMap(id => {
     const name = providerKey + id
-    const profile = connectionProfile(id, local[name])
-    if (!profile) return []
-    const reasoning = Object.fromEntries(profile.models.flatMap(model => {
+    const saved = connectionProfile(id, local[name])
+    if (!saved) return []
+    const connection = sessionFor(saved, session[name])
+    const catalog = session[catalogKey + id] as SessionCatalog | undefined
+    const models = connection && catalog && catalog.endpoint === connection.endpoint && catalog.revision === connection.revision &&
+      catalog.models.length ? preferredModels(catalog.models, saved.models[0] ?? "") : saved.models
+    const profile = { ...saved, models }
+    const reasoning = Object.fromEntries(models.flatMap(model => {
       const effort = modelReasoningEffort(id, model, local[effortKey(id, model)])
       return effort ? [[model, effort]] : []
     }))
-    return [{ profile, connected: keyFor(profile, session[name]) !== undefined, reasoning }]
+    return [{ profile, connected: connection !== undefined, reasoning }]
   })
   const choices = connections.filter(item => item.connected).flatMap(({ profile }) =>
     profile.models.map(model => ({ provider: profile.id, model })))
@@ -64,6 +86,20 @@ export async function readModelSettings(): Promise<{ connections: ModelConnectio
   const selected = choices.find(choice => choice.provider === saved?.provider && choice.model === saved?.model) ??
     choices.find(choice => choice.provider === (saved?.provider ?? local.selectedProvider)) ?? choices[0]
   return { connections, selected }
+}
+
+export async function refreshConnectedModelCatalogs(connections: ModelConnection[], signal: AbortSignal): Promise<void> {
+  await Promise.allSettled(connections.filter(item => item.connected).map(async ({ profile }) => {
+    const name = providerKey + profile.id
+    const connection = sessionFor(profile, (await chrome.storage.session.get(name))[name])
+    if (!connection || !await chrome.permissions.contains({ origins: [modelHostPattern(profile.baseUrl)] })) return
+    const models = await listProviderModels(profile.baseUrl, connection.key, signal)
+    const latest = sessionFor(profile, (await chrome.storage.session.get(name))[name])
+    signal.throwIfAborted()
+    if (latest?.revision !== connection.revision || latest?.key !== connection.key) return
+    const catalog: SessionCatalog = { endpoint: connection.endpoint, revision: connection.revision, models }
+    await chrome.storage.session.set({ [catalogKey + profile.id]: catalog })
+  }))
 }
 
 export async function saveReasoningEffort(id: ProviderId, model: string, effort?: ReasoningEffort): Promise<void> {
@@ -79,14 +115,16 @@ async function connectionCredentials(profile: ConnectionEndpoint, key: string, a
   if (!await authorized) throw new Error("Chrome 未授权访问模型 API")
   const endpoint = completionEndpoint(profile.baseUrl).href
   const name = providerKey + profile.id
-  const apiKey = key.trim() || keyFor(profile, (await chrome.storage.session.get(name))[name]) || ""
+  const apiKey = key.trim() || sessionFor(profile, (await chrome.storage.session.get(name))[name])?.key || ""
   if (!apiKey && isBuiltinProvider(profile.id)) throw new Error("请为这个 API 地址输入 API Key")
   return { endpoint, name, apiKey }
 }
 
-export async function loadModelCatalog(profile: ConnectionEndpoint, key: string, authorized: Promise<boolean>): Promise<string[]> {
+export async function loadModelCatalog(
+  profile: ConnectionEndpoint, key: string, authorized: Promise<boolean>, signal?: AbortSignal,
+): Promise<string[]> {
   const { apiKey } = await connectionCredentials(profile, key, authorized)
-  return listProviderModels(profile.baseUrl, apiKey)
+  return listProviderModels(profile.baseUrl, apiKey, signal)
 }
 
 export async function connectProvider(profile: ConnectionProfile, key: string, authorized: Promise<boolean>): Promise<void> {
@@ -96,19 +134,19 @@ export async function connectProvider(profile: ConnectionProfile, key: string, a
     throw new Error("请输入连接名称和有效的模型 ID")
   }
   await testProvider({ id: profile.id, baseUrl: profile.baseUrl, model }, apiKey)
-  await chrome.storage.local.set({ [name]: profile })
-  await chrome.storage.session.set({ [name]: { key: apiKey, endpoint } })
+  await chrome.storage.local.set({ [name]: profile, selectedModel: { provider: profile.id, model } })
+  await chrome.storage.session.set({ [name]: { key: apiKey, endpoint, revision: crypto.randomUUID() } satisfies SessionConnection })
 }
 
 export function disconnectProvider(id: ProviderId): Promise<void> {
-  return chrome.storage.session.remove(providerKey + id)
+  return chrome.storage.session.remove([providerKey + id, catalogKey + id])
 }
 
 export async function providerForRun(id: ProviderId, model?: string) {
   const name = providerKey + id
   const [local, session] = await Promise.all([chrome.storage.local.get(name), chrome.storage.session.get(name)])
   const connection = connectionProfile(id, local[name])
-  const apiKey = connection && keyFor(connection, session[name])
+  const apiKey = connection && sessionFor(connection, session[name])?.key
   const selected = model ?? connection?.models[0]
   if (!connection || !selected || apiKey === undefined) throw new Error("请在设置中连接模型")
   if (!await chrome.permissions.contains({ origins: [modelHostPattern(connection.baseUrl)] })) {

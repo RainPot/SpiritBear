@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { ChatAttachment } from "../../src/agent/attachments"
 import type { ReasoningEffort } from "../../src/agent/model-options"
 import type { ProviderProfile } from "../../src/agent/provider"
-import { providerForRun, readModelSettings, saveReasoningEffort, type ModelChoice } from "../../src/agent/settings"
-import { hostPattern, pageOrigin } from "../../src/browser/urls"
+import { providerForRun, readModelSettings, refreshConnectedModelCatalogs, saveReasoningEffort, type ModelChoice } from "../../src/agent/settings"
+import { hostPattern } from "../../src/browser/urls"
 import { getExtensionName } from "../../src/extension-name"
 import { PanelClient } from "../../src/run/client"
 import { saveMarkdown } from "../../src/run/export"
@@ -63,6 +63,7 @@ export function App() {
 
   useEffect(() => {
     let active = true
+    const catalog = new AbortController()
     const client = new PanelClient(updateRun, () => {
       const current = runner.current
       // 空闲时 Chrome 会回收 Worker，下一次请求会自动建立连接。
@@ -80,10 +81,23 @@ export function App() {
       const newest = history.find(item => item.status === "running") ?? history[0]
       if (newest) setThreadId(conversationId(newest))
     }, error => { if (active) setError(message(error)) })
-    void readModelSettings().then(value => { if (active) setModels(value) },
-      error => { if (active) setError(message(error)) })
+    void (async () => {
+      const saved = await readModelSettings()
+      if (!active) return
+      setModels(saved)
+      if (!saved.connections.some(connection => connection.connected)) return
+      await refreshConnectedModelCatalogs(saved.connections, catalog.signal)
+      if (!active) return
+      const updated = await readModelSettings()
+      if (active) setModels(current => {
+        const selected = current.selected
+        return selected && updated.connections.some(item => item.connected && item.profile.id === selected.provider &&
+          item.profile.models.includes(selected.model)) ? { ...updated, selected } : updated
+      })
+    })().catch(error => { if (active) setError(message(error)) })
     return () => {
       active = false
+      catalog.abort()
       runner.current?.controller.abort()
       client.close()
       clientRef.current = null
@@ -166,14 +180,8 @@ export function App() {
       return
     }
     let permission: Promise<boolean>
-    const startUrl = draft.startUrl?.trim() || undefined
     try {
       const origins = new Set(draft.references.map(ref => ref.origin))
-      if (startUrl) {
-        const origin = pageOrigin(startUrl)
-        if (!origin) throw new Error("起始网址须为 Chrome 可访问的 HTTPS 网页")
-        origins.add(origin)
-      }
       permission = origins.size
         ? chrome.permissions.request({ origins: [...origins].map(hostPattern) })
         : Promise.resolve(true)
@@ -188,7 +196,7 @@ export function App() {
       if (currentWindowId === undefined) throw new Error("无法确定当前浏览器窗口")
       const started = await client.request<RunState>({
         kind: "start",
-        input: { ...draft, windowId: currentWindowId, ...selected, startUrl, uiLanguage: language, previousRunId: last?.id },
+        input: { ...draft, windowId: currentWindowId, ...selected, uiLanguage: language, previousRunId: last?.id },
       })
       followTail.current = true
       setAwayFromEnd(false)

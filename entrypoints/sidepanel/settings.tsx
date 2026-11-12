@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react"
-import { isBuiltinProvider, modelHostPattern, type ProviderId } from "../../src/agent/provider"
-import { connectProvider, disconnectProvider, loadModelCatalog, type ModelConnection } from "../../src/agent/settings"
+import { useEffect, useRef, useState, type FormEvent } from "react"
+import { completionEndpoint, isBuiltinProvider, modelHostPattern, type ProviderId } from "../../src/agent/provider"
+import { connectProvider, disconnectProvider, loadModelCatalog, preferredModels, type ModelConnection } from "../../src/agent/settings"
 import { uiLanguageKey, type UiLanguage } from "../../src/i18n"
 import { ChatIcon } from "./chat-icon"
 import { useLanguage } from "./language"
@@ -44,19 +44,66 @@ interface ConnectionFormProps {
   onChanged: () => Promise<void>
 }
 
+function sameEndpoint(first: string, second: string): boolean {
+  try {
+    return completionEndpoint(first).href === completionEndpoint(second).href
+  } catch {
+    return false
+  }
+}
+
 function ConnectionForm({ connection, onBack, onChanged }: ConnectionFormProps) {
   const { t } = useLanguage()
   const { profile, connected } = connection
   const custom = !isBuiltinProvider(profile.id)
   const [label, setLabel] = useState(profile.label)
   const [baseUrl, setBaseUrl] = useState(profile.baseUrl)
-  const [models, setModels] = useState(profile.models.join("\n"))
+  const [model, setModel] = useState(profile.models[0] ?? "")
   const [catalog, setCatalog] = useState<string[]>([])
   const [key, setKey] = useState("")
   const [status, setStatus] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
-  const ids = [...new Set(models.split("\n").map(value => value.trim()).filter(Boolean))]
+  const [loading, setLoading] = useState(false)
+  const catalogRequest = useRef<AbortController>(null)
+  const useSavedKey = connected && !key.trim() && sameEndpoint(baseUrl, profile.baseUrl)
+  const choices = catalog.length ? catalog : useSavedKey ? profile.models : []
+
+  function resetCatalog() {
+    catalogRequest.current?.abort()
+    setCatalog([])
+    setLoading(false)
+    setError("")
+  }
+
+  useEffect(() => {
+    if (!baseUrl.trim() || (!custom && !key.trim() && !useSavedKey)) return
+    const request = new AbortController()
+    catalogRequest.current = request
+    const timer = window.setTimeout(async () => {
+      try {
+        const origins = [modelHostPattern(baseUrl)]
+        const allowed = await chrome.permissions.contains({ origins })
+        if (!allowed || request.signal.aborted) return
+        setLoading(true)
+        const available = await loadModelCatalog({ id: profile.id, baseUrl }, key, Promise.resolve(true), request.signal)
+        if (!request.signal.aborted) {
+          setCatalog(available)
+          setError("")
+        }
+      } catch (error) {
+        if (!request.signal.aborted && !(error instanceof TypeError)) {
+          setError(error instanceof Error ? error.message : "模型配置更新失败")
+        }
+      } finally {
+        if (!request.signal.aborted) setLoading(false)
+      }
+    }, 450)
+    return () => {
+      request.abort()
+      window.clearTimeout(timer)
+    }
+  }, [baseUrl, custom, key, profile.id, useSavedKey])
 
   async function apply(action: () => Promise<void>, pending: string) {
     setBusy(true)
@@ -75,50 +122,25 @@ function ConnectionForm({ connection, onBack, onChanged }: ConnectionFormProps) 
   function submit(event: FormEvent) {
     event.preventDefault()
     if (busy) return
-    if (!ids.length) {
-      setError("请填写至少一个模型 ID")
-      return
-    }
     try {
-      const candidate = { id: profile.id, label: label.trim(), baseUrl: baseUrl.trim(), models: ids }
+      const candidate = { id: profile.id, label: label.trim(), baseUrl: baseUrl.trim() }
       const authorized = chrome.permissions.request({ origins: [modelHostPattern(candidate.baseUrl)] })
+      catalogRequest.current?.abort()
+      setLoading(false)
       void apply(async () => {
-        await connectProvider(candidate, key, authorized)
+        const available = catalog.length ? catalog : await loadModelCatalog(candidate, key, authorized).catch(error => {
+          if (useSavedKey) return profile.models
+          throw error
+        })
+        setCatalog(available)
+        setStatus("正在测试模型工具调用…")
+        await connectProvider({ ...candidate, models: preferredModels(available, model) }, key, authorized)
         await onChanged()
-      }, "正在测试模型工具调用…")
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "模型配置无效")
-    }
-  }
-
-  function fetchCatalog() {
-    if (busy) return
-    if (!custom && !connected && !key.trim()) {
-      setError("请为这个 API 地址输入 API Key")
-      return
-    }
-    try {
-      const endpoint = { id: profile.id, baseUrl: baseUrl.trim() }
-      const authorized = chrome.permissions.request({ origins: [modelHostPattern(endpoint.baseUrl)] })
-      setCatalog([])
-      void apply(async () => {
-        setCatalog(await loadModelCatalog(endpoint, key, authorized))
-      }, "正在拉取模型列表…")
+      }, "正在加载模型列表…")
     } catch (error) {
       setError(error instanceof TypeError ? "请输入有效的 API Base URL" :
         error instanceof Error ? error.message : "模型配置无效")
     }
-  }
-
-  function addModel(id: string) {
-    if (!id || ids.includes(id)) return
-    const next = [...ids, id].join("\n")
-    if (next.length > 3000) {
-      setError("模型 ID 列表过长，请删除不再使用的模型")
-      return
-    }
-    setModels(next)
-    setError("")
   }
 
   return <form onSubmit={submit}>
@@ -134,36 +156,29 @@ function ConnectionForm({ connection, onBack, onChanged }: ConnectionFormProps) 
     </label>}
     <label className="field">API Base URL
       <input type="url" value={baseUrl} onChange={event => {
-        setBaseUrl(event.target.value)
-        setCatalog([])
-        setError("")
+        const address = event.target.value
+        if (key && !sameEndpoint(address, baseUrl)) setKey("")
+        setBaseUrl(address)
+        resetCatalog()
       }}
         placeholder={custom ? "http://localhost:11434/v1" : undefined} required disabled={busy} />
     </label>
     <label className="field">API Key
       <input type="password" value={key} onChange={event => {
         setKey(event.target.value)
-        setCatalog([])
-        setError("")
+        resetCatalog()
       }}
-        autoComplete="off" spellCheck={false} disabled={busy} required={!custom && !connected}
+        autoComplete="off" spellCheck={false} disabled={busy} required={!custom && !useSavedKey}
         placeholder={t(connected ? "留空沿用此地址的密钥" : custom ? "可选" : "输入 API Key")} />
     </label>
-    <label className="field">{t("模型 ID")}
-      <textarea value={models} onChange={event => setModels(event.target.value)}
-        rows={3} maxLength={3000} placeholder={t("每行一个模型 ID")} required disabled={busy} />
-    </label>
-    <div className="catalog-controls">
-      <select aria-label={t("从模型列表添加")} value="" disabled={busy || !catalog.length}
-        onChange={event => addModel(event.target.value)}>
-        <option value="">{t(catalog.length ? "选择并添加模型" : "模型列表")}</option>
-        {catalog.map(id => <option key={id} value={id} disabled={ids.includes(id)}>{id}</option>)}
+    <div className="field">
+      <label htmlFor="connection-model">{t("默认模型")}</label>
+      <select id="connection-model" disabled={busy || loading || !choices.length}
+        value={choices.includes(model) ? model : choices[0] ?? ""} onChange={event => setModel(event.target.value)}>
+        {!choices.length && <option value="">{t(loading || status === "正在加载模型列表…" ? "正在加载模型列表…" : "连接后自动加载模型")}</option>}
+        {choices.map(id => <option key={id} value={id}>{id}</option>)}
       </select>
-      <button type="button" className="secondary" disabled={busy || !baseUrl.trim()} onClick={fetchCatalog}>
-        {t(status === "正在拉取模型列表…" ? "正在拉取…" : "拉取模型")}
-      </button>
     </div>
-    <p className="hint">{t("连接时用第一个模型测试工具调用。浏览器重启后需重新连接。")}</p>
     <div className="actions">
       <button className="primary" disabled={busy}>{t(connected ? "保存并测试" : "连接并测试")}</button>
       <button type="button" className="secondary" disabled={busy} onClick={onBack}>{t("返回连接列表")}</button>
